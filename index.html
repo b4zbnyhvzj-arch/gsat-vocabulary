@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#f4f5f8">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>學測單字</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icons/icon-192.png" type="image/png">
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" sizes="180x180">
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-header">
+        <h1>學測單字</h1>
+      </header>
+
+      <p id="load-status" class="notice" role="status">正在載入單字資料…</p>
+      <p id="storage-warning" class="notice storage-warning" role="alert" hidden></p>
+
+      <div id="home" hidden>
+        <p id="offline-status" class="offline-status" role="status" hidden></p>
+        <dl class="summary">
+          <div>
+            <dt>單字總數</dt>
+            <dd id="word-total"></dd>
+          </div>
+          <div>
+            <dt>可練習單元</dt>
+            <dd id="unit-total"></dd>
+          </div>
+        </dl>
+
+        <section class="bank-panel" aria-label="私人題庫">
+          <div class="bank-actions">
+            <button id="choose-bank" type="button" class="quiz-button quiz-button-primary">匯入題庫</button>
+            <button id="export-bank" type="button" class="quiz-button">匯出私人題庫</button>
+          </div>
+          <input id="bank-file" type="file" accept=".json,application/json" hidden>
+          <p id="bank-status" role="status" hidden></p>
+          <div id="bank-preview" class="bank-preview" hidden>
+            <p id="bank-preview-summary" tabindex="-1"></p>
+            <p>確認後會依 ID 合併到這部裝置，並保留原有單字及錯題紀錄。</p>
+            <div class="bank-actions">
+              <button id="confirm-bank" type="button" class="quiz-button quiz-button-primary">確認匯入</button>
+              <button id="cancel-bank" type="button" class="quiz-button">取消</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="catalog" aria-labelledby="catalog-title">
+          <h2 id="catalog-title">單元</h2>
+          <p id="empty-bank" class="notice" hidden>目前沒有題庫。請匯入你的私人題庫 JSON。</p>
+          <div id="unit-groups"></div>
+        </section>
+      </div>
+
+      <section id="unit-detail" class="detail" aria-labelledby="detail-title" hidden>
+        <button id="back-button" type="button" class="back-button">返回單元</button>
+        <div class="detail-card">
+          <h2 id="detail-title" tabindex="-1"></h2>
+          <p id="detail-count"></p>
+          <button id="start-quiz" type="button" class="quiz-button quiz-button-primary">開始基礎測驗</button>
+          <p id="quiz-error" class="quiz-error" role="alert" hidden></p>
+        </div>
+      </section>
+
+      <section id="quiz-screen" aria-labelledby="quiz-title" hidden>
+        <div class="quiz-heading">
+          <div>
+            <p id="quiz-mode" class="quiz-mode" hidden>錯題測驗</p>
+            <h2 id="quiz-title"></h2>
+          </div>
+          <button id="leave-quiz" type="button" class="quiz-button">離開測驗</button>
+        </div>
+
+        <div class="quiz-progress">
+          <label id="question-count" for="quiz-progress-bar"></label>
+          <progress id="quiz-progress-bar" value="0" max="1"></progress>
+        </div>
+
+        <div class="quiz-prompt-card">
+          <p id="question-pos" class="quiz-pos"></p>
+          <h3 id="question-meaning" tabindex="-1" aria-describedby="question-count question-pos"></h3>
+        </div>
+
+        <div id="quiz-options" class="quiz-options" role="group" aria-labelledby="question-meaning"></div>
+        <p id="quiz-feedback" class="quiz-feedback" role="status"></p>
+        <button id="next-question" type="button" class="quiz-button quiz-button-primary" hidden>下一題</button>
+      </section>
+
+      <section id="result-screen" aria-labelledby="result-title" hidden>
+        <div class="quiz-result-card">
+          <h2 id="result-title" tabindex="-1">測驗完成</h2>
+          <p id="result-unit" class="result-unit"></p>
+          <dl class="result-stats">
+            <div>
+              <dt>答對題數</dt>
+              <dd id="correct-total"></dd>
+            </div>
+            <div>
+              <dt>答錯題數</dt>
+              <dd id="wrong-total"></dd>
+            </div>
+            <div>
+              <dt>正確率</dt>
+              <dd id="accuracy"></dd>
+            </div>
+          </dl>
+          <p id="quiz-passed" class="result-pass" hidden>基礎測驗達標</p>
+        </div>
+
+        <section class="quiz-mistakes" aria-labelledby="mistakes-title">
+          <h3 id="mistakes-title">本輪答錯的單字</h3>
+          <p id="no-mistakes">本輪沒有答錯的單字。</p>
+          <ul id="mistake-list" class="mistake-list" role="list" hidden></ul>
+        </section>
+
+        <div class="result-actions">
+          <button id="retry-quiz" type="button" class="quiz-button quiz-button-primary">重新測驗</button>
+          <button id="result-back" type="button" class="quiz-button">返回單元</button>
+        </div>
+      </section>
+
+      <section id="review-screen" aria-labelledby="review-title" hidden>
+        <h2 id="review-title" tabindex="-1">錯題本</h2>
+        <div id="review-content">
+          <dl class="summary review-summary" aria-live="polite">
+            <div>
+              <dt>待複習單字</dt>
+              <dd id="review-pending-count"></dd>
+            </div>
+            <div>
+              <dt>已熟悉單字</dt>
+              <dd id="review-familiar-count"></dd>
+            </div>
+          </dl>
+
+          <div class="review-filters">
+            <label for="review-unit">單元</label>
+            <select id="review-unit">
+              <option value="">全部單元</option>
+            </select>
+            <fieldset id="review-status" class="review-status">
+              <legend class="review-visually-hidden">熟悉狀態</legend>
+              <label><input type="radio" name="review-status" value="pending" checked><span>待複習</span></label>
+              <label><input type="radio" name="review-status" value="all"><span>全部</span></label>
+              <label><input type="radio" name="review-status" value="familiar"><span>已熟悉</span></label>
+            </fieldset>
+          </div>
+
+          <div class="review-practice">
+            <button id="start-review-quiz" class="quiz-button quiz-button-primary" type="button"
+              aria-describedby="review-quiz-count review-quiz-note" disabled>開始錯題測驗</button>
+            <p id="review-quiz-count"></p>
+            <p id="review-quiz-note" role="status" hidden></p>
+            <p id="review-quiz-error" role="alert" hidden></p>
+          </div>
+
+          <p id="review-empty" class="notice review-empty" role="status" hidden></p>
+          <ul id="review-list" class="review-list" role="list"></ul>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tab-bar" aria-label="主要導覽">
+      <div class="tab-bar-inner">
+        <button id="units-tab" class="tab tab-active" type="button" aria-current="page">
+          <span class="tab-icon icon-book" aria-hidden="true"></span>
+          單元
+        </button>
+        <button id="review-tab" class="tab" type="button" disabled>
+          <span class="tab-icon icon-bookmark" aria-hidden="true"></span>
+          錯題本
+        </button>
+      </div>
+    </nav>
+  </body>
+</html>
