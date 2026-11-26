@@ -1,0 +1,32 @@
+:root{font-family:system-ui,sans-serif;background:#f3f5f9;color:#172038;line-height:1.55}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0}
+main{width:min(100%,52rem);margin:auto;padding:1.25rem 1rem 3rem}
+header{padding:.5rem .25rem 1rem}
+h1,h2,p{margin:.15rem 0 .5rem}
+h1{font-size:1.85rem}
+h2{font-size:1.23rem}
+header p,#photo-name,#duration{color:#495775}
+form,section{padding:1rem;background:white;border:1px solid #dfe5ef;border-radius:1rem;margin-bottom:.8rem}
+.photo-actions,.fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem;margin:.4rem 0 .8rem}
+button,.pick,select{min-height:44px;font:inherit;border-radius:.65rem;padding:.5rem .6rem;border:1px solid #b9c8dd;background:#f6faff;color:#143c79}
+button,.pick{cursor:pointer;text-align:center;font-weight:650}
+#recognize{background:#1858b0;color:white}
+button:disabled{opacity:.5;cursor:default}
+.pick{position:relative}
+.pick input{opacity:0;position:absolute;inset:0;width:100%;cursor:pointer}
+.pick:focus-within{outline:2px solid #1858b0}
+select{width:100%;display:block;margin-top:.2rem}
+progress{width:100%;accent-color:#1858b0}
+.activity{padding:.6rem 1rem}
+.activity p{margin:0}
+.image-stage{position:relative}
+.image-stage img{width:100%;height:auto;display:block}
+.image-stage svg{width:100%;height:100%;position:absolute;inset:0;pointer-events:none}
+polygon{stroke:#196cff;stroke-width:1;vector-effect:non-scaling-stroke;fill:#4696ff33}
+.result-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+details{margin-top:.5rem;border-top:1px solid #dfe5ef;padding-top:.5rem}
+summary{min-height:44px;padding:.5rem 0;cursor:pointer;font-weight:650}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+li,p{overflow-wrap:anywhere}

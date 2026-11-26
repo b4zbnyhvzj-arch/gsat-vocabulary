@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; img-src 'self' blob: data:; connect-src 'self'; style-src 'self'; form-action 'none'; object-src 'none'">
+  <title>OCR 辨識測試</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./lab.js"></script>
+</head>
+<body>
+  <main>
+    <header><h1>OCR 辨識測試</h1><p>照片與結果只在這部裝置處理。</p></header>
+    <form id="settings">
+      <div class="photo-actions">
+        <label class="pick">從相簿選取<input id="album" type="file" accept="image/*"></label>
+        <label class="pick">拍攝照片<input id="camera" type="file" accept="image/*" capture="environment"></label>
+      </div>
+      <p id="photo-name">尚未選取照片</p>
+      <div class="fields">
+        <label>辨識引擎<select id="engine"><option value="paddle">PaddleOCR.js</option><option value="tesseract">Tesseract.js</option></select></label>
+        <label>輸入長邊<select id="resolution"><option value="2048">2048 px</option><option value="1600">1600 px（低記憶體）</option><option value="0">原始大小</option></select></label>
+      </div>
+      <label>測試模式<select id="runs"><option value="1">單次</option><option value="5">連續五次（同一張）</option></select></label>
+      <p id="resource-size" role="status"></p>
+      <div class="photo-actions">
+        <button id="recognize" disabled>開始辨識</button>
+        <button id="cache" type="button">下載所選引擎</button>
+        <button id="release" type="button" disabled>釋放引擎</button>
+      </div>
+      <p id="offline-status" role="status"></p>
+    </form>
+    <section class="activity" aria-label="辨識進度">
+      <progress id="progress" max="1" hidden></progress>
+      <p id="status" role="status">請先選取照片。</p>
+    </section>
+    <section id="preview" hidden>
+      <h2>辨識框</h2>
+      <div class="image-stage"><img id="photo" alt="待辨識照片"><svg id="boxes" aria-hidden="true"></svg></div>
+    </section>
+    <section id="history" hidden>
+      <div class="result-head"><h2>測試紀錄</h2><button id="export" type="button">匯出 JSON</button></div>
+      <p id="memory"></p><ol id="history-list"></ol>
+    </section>
+    <section id="result" hidden>
+      <div class="result-head"><h2>辨識結果</h2></div>
+      <p id="duration"></p>
+      <details open><summary>原始文字</summary><pre id="text"></pre></details>
+      <details><summary>文字區塊與信心分數</summary><ol id="blocks"></ol></details>
+    </section>
+  </main>
+</body>
+</html>
