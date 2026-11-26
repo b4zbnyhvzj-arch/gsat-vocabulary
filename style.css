@@ -590,3 +590,112 @@ button .unit-meta {
   font-size: .875rem;
   font-weight: 650;
 }
+
+.management-heading, .management-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .625rem;
+}
+
+.management-heading { justify-content: space-between; }
+.detail-actions { margin-top: .875rem; }
+.unit-row.is-empty .unit-meta { color: var(--muted); background: #f2f3f6; }
+#start-quiz:disabled { opacity: .65; cursor: default; }
+
+.management-card, .managed-word {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: #fff;
+}
+
+.management-card {
+  display: grid;
+  gap: 1rem;
+}
+
+.management-card fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: .75rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+}
+
+.management-card legend { padding: 0 .25rem; font-weight: 650; }
+
+.management-card label, .word-search {
+  display: grid;
+  min-width: 0;
+  gap: .25rem;
+  font-weight: 600;
+}
+
+.management-card :is(input:not([type="checkbox"]), textarea, select), .word-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: .5rem .625rem;
+  border: 1px solid #c8cdd7;
+  border-radius: .625rem;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.management-card textarea { resize: vertical; }
+.field-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.field-columns > label { align-content: start; }
+.management-card fieldset > label + label { margin-top: .625rem; }
+
+.word-parts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(4.5rem, 1fr));
+  gap: .25rem .5rem;
+}
+
+.management-card .word-check {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-height: 2.75rem;
+  color: inherit;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.word-check input { flex: none; width: 1rem; height: 1rem; accent-color: var(--blue); }
+
+.management-card details {
+  padding: .125rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: .75rem;
+}
+
+.management-card summary {
+  padding: .625rem 0;
+  min-height: 2.75rem;
+  color: var(--blue);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.management-card details > :not(summary) { margin: 0 0 .75rem; }
+.management-note { color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }
+.management-error { color: #9d2929; overflow-wrap: anywhere; }
+
+.word-search { margin: .75rem 0; }
+.managed-words { display: grid; gap: .5rem; list-style: none; padding: 0; }
+.managed-word { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.managed-word > div { min-width: 0; overflow-wrap: anywhere; }
+.managed-word button { flex: none; }
+.managed-word strong { color: var(--blue); }
+
+.duplicate-panel { padding: .875rem; border-radius: .75rem; background: var(--blue-tint); }
+.duplicate-panel p { margin-top: .5rem; }
+.duplicate-panel dl { margin: .75rem 0; overflow-wrap: anywhere; }
+.duplicate-panel dt { font-weight: 650; }
+.duplicate-panel dd { margin: 0 0 .625rem; }

@@ -1,4 +1,4 @@
-const VERSION = "v0.5.1";
+const VERSION = "v0.6.2";
 const scope = new URL(self.registration.scope);
 const cachePrefix = `gsat-vocabulary:${scope.href}:`;
 const cacheName = cachePrefix + VERSION;

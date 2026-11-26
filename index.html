@@ -52,8 +52,11 @@
         </section>
 
         <section class="catalog" aria-labelledby="catalog-title">
-          <h2 id="catalog-title">單元</h2>
-          <p id="empty-bank" class="notice" hidden>目前沒有題庫。請匯入你的私人題庫 JSON。</p>
+          <div class="management-heading">
+            <h2 id="catalog-title">單元</h2>
+            <button id="add-unit" type="button" class="quiz-button">新增單元</button>
+          </div>
+          <p id="empty-bank" class="notice" hidden>目前沒有單元。可以新增單元或匯入私人題庫。</p>
           <div id="unit-groups"></div>
         </section>
       </div>
@@ -63,9 +66,110 @@
         <div class="detail-card">
           <h2 id="detail-title" tabindex="-1"></h2>
           <p id="detail-count"></p>
+          <div class="management-actions detail-actions">
+            <button id="edit-unit" type="button" class="quiz-button">編輯單元</button>
+            <button id="manage-words" type="button" class="quiz-button">管理單字</button>
+          </div>
           <button id="start-quiz" type="button" class="quiz-button quiz-button-primary">開始基礎測驗</button>
           <p id="quiz-error" class="quiz-error" role="alert" hidden></p>
         </div>
+      </section>
+
+      <section id="unit-editor" aria-labelledby="unit-editor-title" hidden>
+        <button type="button" class="back-button" data-cancel-editor>返回</button>
+        <form id="unit-form" class="management-card">
+          <h2 id="unit-editor-title" tabindex="-1"></h2>
+          <label>單元名稱 <input name="name" required></label>
+          <label>教材分類 <input name="textbook"></label>
+          <div class="field-columns">
+            <label>Level <input name="level" type="number" min="1" step="1" inputmode="numeric"></label>
+            <label>單元編號 <input name="unitNumber" type="number" min="1" step="1" inputmode="numeric"></label>
+          </div>
+          <p class="management-error" role="alert" hidden></p>
+          <div class="management-actions">
+            <button type="submit" class="quiz-button quiz-button-primary">儲存單元</button>
+            <button type="button" class="quiz-button" data-cancel-editor>取消</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="word-manager" aria-labelledby="word-manager-title" hidden>
+        <button id="back-from-words" type="button" class="back-button">返回單元詳情</button>
+        <div class="management-heading">
+          <h2 id="word-manager-title" tabindex="-1">管理單字</h2>
+          <button id="add-word" type="button" class="quiz-button quiz-button-primary">新增單字</button>
+        </div>
+        <p id="word-manager-unit" class="management-note"></p>
+        <label class="word-search">搜尋英文或中文
+          <input id="word-search" type="search" autocomplete="off">
+        </label>
+        <p id="word-list-empty" class="notice" role="status" hidden></p>
+        <ul id="managed-words" class="managed-words" role="list"></ul>
+      </section>
+
+      <section id="word-editor" aria-labelledby="word-editor-title" hidden>
+        <button type="button" class="back-button" data-cancel-editor>返回單字管理</button>
+        <form id="word-form" class="management-card">
+          <h2 id="word-editor-title" tabindex="-1"></h2>
+          <label>英文單字 <input name="english" lang="en" autocapitalize="off" autocomplete="off" spellcheck="false" required></label>
+          <label>中文意思（每行一個） <textarea name="meanings" rows="3" required></textarea></label>
+          <fieldset>
+            <legend>詞性（可複選）</legend>
+            <div id="word-parts" class="word-parts"></div>
+          </fieldset>
+          <label>教材來源 <input name="material" required></label>
+          <div class="field-columns">
+            <label>頁碼 <input name="page" placeholder="已核對時必填"></label>
+            <label>核對狀態
+              <select name="verification">
+                <option value="unverified">待核對</option>
+                <option value="verified">已核對</option>
+              </select>
+            </label>
+          </div>
+          <details id="word-advanced">
+            <summary>進階出題設定</summary>
+            <p class="management-note">多詞性單字須指定出題詞性與詞義。動詞題必須填寫完整三態。</p>
+            <div class="field-columns">
+              <label>出題詞性 <select name="quizPart"></select></label>
+              <label>出題詞義 <select name="quizMeaning"></select></label>
+            </div>
+            <fieldset>
+              <legend>動詞三態</legend>
+              <label>原形 <input name="base" lang="en" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+              <label>過去式 <input name="past" lang="en" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+              <label>過去分詞 <input name="pastParticiple" lang="en" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+              <label>三態來源
+                <select name="formsSource">
+                  <option value="supplemental">出題補充</option>
+                  <option value="original">教材記載</option>
+                </select>
+              </label>
+            </fieldset>
+            <fieldset>
+              <legend>同單元歧義排除</legend>
+              <p class="management-note">勾選不應與這個單字同時出現在選項中的詞條。</p>
+              <div id="word-exclusions"></div>
+            </fieldset>
+          </details>
+          <p class="management-error" role="alert" hidden></p>
+          <section id="word-duplicate" aria-labelledby="duplicate-title" class="duplicate-panel" hidden>
+            <h3 id="duplicate-title" tabindex="-1">確認合併重複單字</h3>
+            <p>合併會保留原有單字 ID、拼字及教材來源，並整合詞性和詞義。</p>
+            <dl>
+              <dt>原有內容</dt><dd id="duplicate-existing"></dd>
+              <dt>新增內容</dt><dd id="duplicate-incoming"></dd>
+            </dl>
+            <div class="management-actions">
+              <button id="confirm-word-merge" type="button" class="quiz-button quiz-button-primary">確認合併</button>
+              <button id="cancel-word-merge" type="button" class="quiz-button">取消合併</button>
+            </div>
+          </section>
+          <div class="management-actions">
+            <button type="submit" class="quiz-button quiz-button-primary">儲存單字</button>
+            <button type="button" class="quiz-button" data-cancel-editor>取消</button>
+          </div>
+        </form>
       </section>
 
       <section id="quiz-screen" aria-labelledby="quiz-title" hidden>

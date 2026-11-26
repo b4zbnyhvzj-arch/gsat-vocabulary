@@ -5,6 +5,8 @@ const verbParts = new Set(["v.", "vt.", "vi."]);
 const partsOfSpeech = new Set([
   ...verbParts, "n.", "a.", "adj.", "adv.", "pron.", "prep.", "conj.", "interj.", "art.", "det.", "aux.", "phr.",
 ]);
+const unitFields = ["name", "textbook", "level", "unitNumber", "expectedWordCount"];
+const wordFields = ["english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms"];
 
 const isRecord = value => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = value => typeof value === "string" && value.trim().length > 0;
@@ -76,7 +78,7 @@ export function validateBank(bank) {
 
   const unitIds = new Set();
   for (const unit of bank.units) {
-    requireBank(onlyFields(unit, ["id", "name", "textbook", "level", "unitNumber", "expectedWordCount"]) &&
+    requireBank(onlyFields(unit, ["id", ...unitFields]) &&
       isId(unit.id) && isText(unit.name) && optionalText(unit.textbook) &&
       optionalCount(unit.level, 1) && optionalCount(unit.unitNumber, 1) && optionalCount(unit.expectedWordCount, 0),
     "單元 ID、名稱或教材欄位無效。");
@@ -87,7 +89,7 @@ export function validateBank(bank) {
   const words = new Map();
   const wordParts = new Map();
   for (const word of bank.words) {
-    requireBank(onlyFields(word, ["id", "unitId", "english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms"]) &&
+    requireBank(onlyFields(word, ["id", "unitId", ...wordFields]) &&
       isId(word.id) && isText(word.english) && Array.isArray(word.chineseMeanings) &&
       word.chineseMeanings.length > 0 && word.chineseMeanings.every(isText),
     "單字 ID、英文或中文意思無效。");
@@ -150,6 +152,148 @@ export function mergeBanks(current, incoming) {
   });
 }
 
+const comparisonKey = value => typeof value === "string" ? value.trim().normalize("NFC").toLowerCase() : "";
+
+function newId(prefix, records) {
+  let id;
+  do {
+    const values = crypto.getRandomValues(new Uint32Array(4));
+    id = prefix + "-" + Array.from(values, value => value.toString(16).padStart(8, "0")).join("");
+  } while (records.some(record => record.id === id));
+  return id;
+}
+
+function checkDuplicateUnit(units, unit) {
+  const duplicate = units.find(other =>
+    other.id !== unit.id &&
+    comparisonKey(other.textbook) === comparisonKey(unit.textbook) &&
+    (other.level ?? null) === (unit.level ?? null) &&
+    (other.unitNumber != null && unit.unitNumber != null
+      ? other.unitNumber === unit.unitNumber
+      : comparisonKey(other.name) === comparisonKey(unit.name))
+  );
+  if (duplicate) throw new Error(`同一教材分類已有相同的單元（${duplicate.id}）。`);
+}
+
+export class DuplicateWordError extends Error {
+  constructor(existingWordId, canMerge) {
+    const action = canMerge ? "請先確認是否與既有詞條合併。" : "請保留兩筆 ID，選擇不同拼字或編輯既有詞條。";
+    super(`同一單元已有相同拼字（${existingWordId}）。${action}`);
+    this.name = "DuplicateWordError";
+    this.code = "DUPLICATE_WORD";
+    this.existingWordId = existingWordId;
+    this.canMerge = canMerge;
+  }
+}
+
+function findDuplicateWord(words, word) {
+  const english = comparisonKey(word.english);
+  return words.find(other => other.id !== word.id && other.unitId === word.unitId &&
+    comparisonKey(other.english) === english);
+}
+
+function makeWord(current, fields) {
+  const word = { ...current, ...fields };
+  if (word.verbForms === null) delete word.verbForms;
+  return word;
+}
+
+function applyWordSettings(settings, id, changes) {
+  if (changes === undefined) return;
+  if (changes === null) {
+    delete settings[id];
+    return;
+  }
+  requireBank(onlyFields(changes, ["sense", "supplementalVerbForms"]), "單字出題設定無效。");
+  const existing = Object.hasOwn(settings, id) ? settings[id] : undefined;
+  const next = { ...existing, ...changes };
+  for (const key of Object.keys(next)) {
+    if (next[key] === null) delete next[key];
+  }
+  // Define the property directly so legacy IDs such as "__proto__" are treated as data.
+  Object.defineProperty(settings, id, { value: next, enumerable: true, configurable: true, writable: true });
+}
+
+function applyWordExclusions(settings, id, excludedWordIds, replace) {
+  if (excludedWordIds === undefined) return;
+  requireBank(Array.isArray(excludedWordIds) && excludedWordIds.every(isId) &&
+    new Set(excludedWordIds).size === excludedWordIds.length, "歧義排除單字 ID 清單無效或重複。");
+  const existing = replace ? settings.excludedPairs.filter(pair => !pair.includes(id)) : settings.excludedPairs;
+  const pairs = new Map(existing.map(pair => [pairKey(pair), pair]));
+  for (const otherId of excludedWordIds) {
+    const pair = [id, otherId];
+    pairs.set(pairKey(pair), pair);
+  }
+  settings.excludedPairs = [...pairs.values()];
+}
+
+function mergeDuplicateWord(bank, existing, draft, changes) {
+  // Check the incoming word on its own before preserving the existing source and spelling.
+  const singleSettings = { wordSettings: {}, excludedPairs: [] };
+  applyWordSettings(singleSettings.wordSettings, draft.id, changes);
+  validateBank({
+    schemaVersion: bank.schemaVersion,
+    units: bank.units,
+    words: [draft],
+    quizSettings: singleSettings,
+  });
+
+  const settings = bank.quizSettings.wordSettings;
+  const existingSetting = Object.hasOwn(settings, existing.id) ? settings[existing.id] : undefined;
+  let mergedChanges = changes;
+  if (changes?.supplementalVerbForms) {
+    mergedChanges = {
+      ...changes,
+      supplementalVerbForms: existing.verbForms ? null : {
+        ...changes.supplementalVerbForms, base: existing.english,
+      },
+    };
+  } else if (changes !== null && draft.verbForms && !existing.verbForms &&
+      !existingSetting?.supplementalVerbForms) {
+    // The draft's source differs from the retained record's source.
+    mergedChanges = { ...changes, supplementalVerbForms: { ...draft.verbForms, base: existing.english } };
+  }
+  applyWordSettings(settings, existing.id, mergedChanges);
+
+  const splitParts = value => value.trim().split(/\s*&\s*/);
+  return {
+    ...existing,
+    chineseMeanings: [...new Set([...existing.chineseMeanings, ...draft.chineseMeanings])],
+    partOfSpeech: [...new Set([...splitParts(existing.partOfSpeech), ...splitParts(draft.partOfSpeech)])].join(" & "),
+    verificationStatus: existing.verificationStatus === "verified" && draft.verificationStatus === "verified"
+      ? "verified" : "unverified",
+  };
+}
+
+/**
+ * Builds and validates a dry-run batch without writing storage. Each draft has
+ * { word, quizSettings?, excludedWordIds?, mergeIntoWordId? }. Only a confirmed
+ * duplicate draft can merge into an existing record, using the ID in the conflict.
+ */
+export function prepareAddedWords(current, drafts) {
+  requireBank(Array.isArray(drafts) && drafts.length > 0, "請提供至少一筆要新增的單字。");
+  const bank = structuredClone(validateBank(current));
+  for (const draft of drafts) {
+    requireBank(onlyFields(draft, ["word", "quizSettings", "excludedWordIds", "mergeIntoWordId"]) &&
+      onlyFields(draft.word, ["unitId", ...wordFields]) && isText(draft.word.english), "新增單字欄位無效。");
+    const duplicate = findDuplicateWord(bank.words, draft.word);
+    if (duplicate && draft.mergeIntoWordId !== duplicate.id) throw new DuplicateWordError(duplicate.id, true);
+    if (!duplicate && draft.mergeIntoWordId !== undefined) throw new Error("原合併對象已不存在，請重新確認。");
+
+    const id = duplicate?.id ?? newId("word", bank.words);
+    const word = makeWord({ id }, draft.word);
+    if (duplicate) {
+      const index = bank.words.indexOf(duplicate);
+      bank.words[index] = mergeDuplicateWord(bank, duplicate, word, draft.quizSettings);
+    } else {
+      bank.words.push(word);
+      applyWordSettings(bank.quizSettings.wordSettings, id, draft.quizSettings);
+    }
+    applyWordExclusions(bank.quizSettings, id, draft.excludedWordIds, false);
+  }
+  return validateBank(bank);
+}
+
 export function createBankStorage(storage) {
   try {
     if (storage === undefined) storage = globalThis.localStorage;
@@ -175,15 +319,67 @@ export function createBankStorage(storage) {
     }
   }
 
-  function importBank(current, incoming) {
-    const merged = mergeBanks(read() ?? current, incoming);
+  function write(bank) {
     try {
-      storage.setItem(BANK_STORAGE_KEY, JSON.stringify(merged));
+      storage.setItem(BANK_STORAGE_KEY, JSON.stringify(bank));
     } catch (cause) {
       throw new Error("儲存本機題庫失敗，原有題庫仍保留。", { cause });
     }
-    return merged;
+    return bank;
   }
 
-  return { read, importBank };
+  function importBank(current, incoming) {
+    return write(mergeBanks(read() ?? current, incoming));
+  }
+
+  function editBank(current, edit) {
+    const bank = structuredClone(validateBank(read() ?? current));
+    edit(bank);
+    return write(validateBank(bank));
+  }
+
+  function addUnit(current, fields) {
+    requireBank(onlyFields(fields, unitFields), "新增單元欄位無效。");
+    return editBank(current, bank => {
+      const unit = { id: newId("unit", bank.units), ...fields };
+      checkDuplicateUnit(bank.units, unit);
+      bank.units.push(unit);
+    });
+  }
+
+  function updateUnit(current, unitId, fields) {
+    requireBank(onlyFields(fields, unitFields), "編輯單元欄位無效。");
+    return editBank(current, bank => {
+      const index = bank.units.findIndex(unit => unit.id === unitId);
+      if (index < 0) throw new Error(`找不到要編輯的單元（${unitId}）。`);
+      const unit = { ...bank.units[index], ...fields };
+      checkDuplicateUnit(bank.units, unit);
+      bank.units[index] = unit;
+    });
+  }
+
+  function addWords(current, drafts) {
+    return write(prepareAddedWords(read() ?? current, drafts));
+  }
+
+  function addWord(current, draft) {
+    return addWords(current, [draft]);
+  }
+
+  function updateWord(current, wordId, changes) {
+    requireBank(onlyFields(changes, ["word", "quizSettings", "excludedWordIds"]) &&
+      (changes.word === undefined || onlyFields(changes.word, wordFields)), "編輯單字欄位無效，單字 ID 與單元不可變更。");
+    return editBank(current, bank => {
+      const index = bank.words.findIndex(word => word.id === wordId);
+      if (index < 0) throw new Error(`找不到要編輯的單字（${wordId}）。`);
+      const word = makeWord(bank.words[index], changes.word);
+      const duplicate = findDuplicateWord(bank.words, word);
+      if (duplicate) throw new DuplicateWordError(duplicate.id, false);
+      bank.words[index] = word;
+      applyWordSettings(bank.quizSettings.wordSettings, wordId, changes.quizSettings);
+      applyWordExclusions(bank.quizSettings, wordId, changes.excludedWordIds, true);
+    });
+  }
+
+  return { read, importBank, addUnit, updateUnit, addWord, addWords, updateWord };
 }

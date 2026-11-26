@@ -1,6 +1,8 @@
 import { createQuiz } from "./quiz.js";
 import { createStudyStorage } from "./storage.js";
-import { BANK_SCHEMA_VERSION, createBankStorage, mergeBanks, parseBank, validateBank } from "./bank.js";
+import {
+  BANK_SCHEMA_VERSION, DuplicateWordError, createBankStorage, mergeBanks, parseBank, validateBank,
+} from "./bank.js";
 
 const home = document.querySelector("#home");
 const detail = document.querySelector("#unit-detail");
@@ -32,6 +34,18 @@ const bankPreviewSummary = document.querySelector("#bank-preview-summary");
 const bankStatus = document.querySelector("#bank-status");
 const chooseBank = document.querySelector("#choose-bank");
 const quizError = document.querySelector("#quiz-error");
+const startQuizButton = document.querySelector("#start-quiz");
+const unitEditor = document.querySelector("#unit-editor");
+const unitForm = document.querySelector("#unit-form");
+const wordManager = document.querySelector("#word-manager");
+const wordSearch = document.querySelector("#word-search");
+const wordEditor = document.querySelector("#word-editor");
+const wordForm = document.querySelector("#word-form");
+const wordAdvanced = document.querySelector("#word-advanced");
+const wordDuplicate = document.querySelector("#word-duplicate");
+const formParts = ["n.", "v.", "vt.", "vi.", "a.", "adj.", "adv.", "pron.", "prep.", "conj.",
+  "interj.", "art.", "det.", "aux.", "phr."];
+const verbParts = new Set(["v.", "vt.", "vi."]);
 const questionMeaning = document.querySelector("#question-meaning");
 const progressBar = document.querySelector("#quiz-progress-bar");
 const optionList = document.querySelector("#quiz-options");
@@ -40,14 +54,16 @@ const nextButton = document.querySelector("#next-question");
 const letters = ["A", "B", "C", "D"];
 const unitNames = new Map();
 const wordsById = new Map();
+const unitQuizErrors = new Map();
 const writeWarnings = new Map();
 let activeBank = null;
 let pendingBank = null;
 let bankReadSequence = 0;
 let studyStorage;
 let readWarning = "";
-let selectedUnit = null;
-let selectedButton = null;
+let selectedUnitId = null;
+let editor = null;
+let duplicateDraft = null;
 let round = null;
 let lastResultWasReview = false;
 
@@ -55,16 +71,12 @@ function formatWordCount(count) {
   return `${numberFormat.format(count)} 個單字`;
 }
 
-function showUnit(unit, count, button) {
-  selectedUnit = unit;
-  selectedButton = button;
-  detailTitle.textContent = unit.name;
-  detailCount.textContent = `收錄 ${formatWordCount(count)}`;
-  showUnitDetail();
+function selectedUnitWords() {
+  return activeBank.words.filter(word => word.unitId === selectedUnitId);
 }
 
 function showScreen(screen) {
-  for (const view of [home, detail, quizScreen, resultScreen, reviewScreen]) {
+  for (const view of [home, detail, quizScreen, resultScreen, reviewScreen, unitEditor, wordManager, wordEditor]) {
     view.hidden = view !== screen;
   }
   const onReviewTab = screen === reviewScreen ||
@@ -79,20 +91,25 @@ function showScreen(screen) {
 }
 
 function showUnitDetail() {
-  quizError.hidden = true;
-  quizError.textContent = "";
+  const message = unitQuizErrors.get(selectedUnitId) ?? "";
+  detailTitle.textContent = unitNames.get(selectedUnitId);
+  detailCount.textContent = `收錄 ${formatWordCount(selectedUnitWords().length)}`;
+  startQuizButton.disabled = Boolean(message);
+  quizError.hidden = !message;
+  quizError.textContent = message;
   showScreen(detail);
   window.scrollTo(0, 0);
   detailTitle.focus();
 }
 
 function showHome() {
-  if (!home.hidden || reviewTab.disabled || !confirmLeaveRound()) return;
+  if (!home.hidden || reviewTab.disabled || !confirmLeaveRound() || !confirmLeaveEditor()) return;
 
   showScreen(home);
-  (selectedButton ?? unitsTab).focus();
-  selectedUnit = null;
-  selectedButton = null;
+  const row = Array.from(document.querySelectorAll(".unit-row"))
+    .find(button => button.dataset.unitId === selectedUnitId);
+  (row ?? unitsTab).focus();
+  selectedUnitId = null;
 }
 
 function warnOnUnload(event) {
@@ -120,7 +137,7 @@ function newRoundId() {
 }
 
 function startQuiz() {
-  if (selectedUnit) launchQuiz(selectedUnit.id);
+  if (selectedUnitId !== null) launchQuiz(selectedUnitId);
 }
 
 function launchQuiz(unitId, wordIds) {
@@ -398,7 +415,7 @@ function renderReview() {
 }
 
 function showReview() {
-  if (!confirmLeaveRound()) return;
+  if (!confirmLeaveRound() || !confirmLeaveEditor()) return;
 
   showScreen(reviewScreen);
   const practice = renderReview();
@@ -416,12 +433,16 @@ function startReviewQuiz() {
 
 function createUnitRow(unit, count) {
   const item = document.createElement("li");
-  const row = document.createElement(count > 0 ? "button" : "div");
+  const row = document.createElement("button");
   row.className = "unit-row";
-  if (count > 0) {
-    row.type = "button";
-    row.addEventListener("click", () => showUnit(unit, count, row));
-  }
+  row.classList.toggle("is-empty", count === 0);
+  row.type = "button";
+  row.dataset.unitId = unit.id;
+  row.addEventListener("click", () => {
+    selectedUnitId = row.dataset.unitId;
+    wordSearch.value = "";
+    showUnitDetail();
+  });
 
   const name = document.createElement("span");
   name.className = "unit-name";
@@ -485,7 +506,7 @@ function renderHome(units, words) {
     groupContainer.append(group);
   }
 
-  const practiceCount = [...counts.values()].filter(count => count > 0).length;
+  const practiceCount = units.length - unitQuizErrors.size;
   document.querySelector("#word-total").textContent = numberFormat.format(words.length);
   document.querySelector("#unit-total").textContent = numberFormat.format(practiceCount);
   document.querySelector("#empty-bank").hidden = units.length > 0;
@@ -518,10 +539,19 @@ function showBankStatus(message, isError = false) {
 }
 
 function applyBank(bank) {
+  unitQuizErrors.clear();
+  for (const unit of bank.units) {
+    try {
+      createQuiz(bank.words, unit.id, { quizSettings: bank.quizSettings, random: () => 0.5 });
+    } catch (error) {
+      unitQuizErrors.set(unit.id, error.message);
+    }
+  }
   renderHome(bank.units, bank.words);
   activeBank = bank;
   unitNames.clear();
   wordsById.clear();
+  const reviewFilter = reviewUnit.value;
   reviewUnit.replaceChildren(reviewUnit.options[0]);
   for (const unit of bank.units) {
     unitNames.set(unit.id, unit.name);
@@ -530,7 +560,286 @@ function applyBank(bank) {
     option.textContent = unit.name;
     reviewUnit.append(option);
   }
+  if (unitNames.has(reviewFilter)) reviewUnit.value = reviewFilter;
   for (const word of bank.words) wordsById.set(word.id, word);
+}
+
+function formSnapshot(form) {
+  return JSON.stringify(Array.from(new FormData(form)));
+}
+
+function showFormError(form, message = "") {
+  const error = form.querySelector(".management-error");
+  error.textContent = message;
+  error.hidden = !message;
+}
+
+function startEditor(screen, form, id) {
+  editor = { form, id, initial: formSnapshot(form) };
+  showFormError(form);
+  showScreen(screen);
+  window.scrollTo(0, 0);
+  form.querySelector("h2").focus();
+}
+
+function finishEditor() {
+  window.removeEventListener("beforeunload", warnOnUnload);
+  clearDuplicate();
+  editor = null;
+}
+
+function confirmLeaveEditor() {
+  if (!editor) return true;
+  if (formSnapshot(editor.form) !== editor.initial && !window.confirm("表單尚未儲存，要放棄變更嗎？")) {
+    return false;
+  }
+  finishEditor();
+  return true;
+}
+
+function cancelEditor() {
+  const destination = editor?.form;
+  if (!destination || !confirmLeaveEditor()) return;
+  if (destination === wordForm) showWordManager();
+  else if (selectedUnitId !== null) showUnitDetail();
+  else showHome();
+}
+
+function openUnitEditor(unitId = null) {
+  const unit = activeBank.units.find(record => record.id === unitId);
+  unitForm.reset();
+  for (const field of ["name", "textbook", "level", "unitNumber"]) {
+    unitForm.elements[field].value = unit?.[field] ?? "";
+  }
+  document.querySelector("#unit-editor-title").textContent = unit ? "編輯單元" : "新增單元";
+  startEditor(unitEditor, unitForm, unitId);
+}
+
+function saveUnit(event) {
+  event.preventDefault();
+  const { id } = editor;
+  const fields = unitForm.elements;
+  const draft = {
+    name: fields.name.value.trim(),
+    textbook: fields.textbook.value.trim() || null,
+    level: fields.level.value === "" ? null : fields.level.valueAsNumber,
+    unitNumber: fields.unitNumber.value === "" ? null : fields.unitNumber.valueAsNumber,
+  };
+  try {
+    const storage = createBankStorage();
+    const saved = id === null ? storage.addUnit(activeBank, draft) : storage.updateUnit(activeBank, id, draft);
+    selectedUnitId = id ?? saved.units[saved.units.length - 1].id;
+    wordSearch.value = "";
+    applyBank(saved);
+    finishEditor();
+    showUnitDetail();
+  } catch (error) {
+    showFormError(unitForm, error.message);
+  }
+}
+
+function describeWord(word) {
+  return `${word.english}（${word.partOfSpeech}） ${word.chineseMeanings.join("、")}`;
+}
+
+function renderManagedWords() {
+  const words = selectedUnitWords();
+  const query = wordSearch.value.trim().toLowerCase();
+  const matches = words.filter(word => word.english.toLowerCase().includes(query) ||
+    word.chineseMeanings.some(meaning => meaning.toLowerCase().includes(query)));
+  const list = document.querySelector("#managed-words");
+  list.replaceChildren();
+  for (const word of matches) {
+    const item = document.createElement("li");
+    item.className = "managed-word";
+    const description = document.createElement("div");
+    const english = document.createElement("strong");
+    english.lang = "en";
+    english.textContent = word.english;
+    const part = document.createElement("p");
+    part.className = "management-note";
+    part.textContent = word.partOfSpeech;
+    const meaning = document.createElement("p");
+    meaning.textContent = word.chineseMeanings.join("、");
+    description.append(english, part, meaning);
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "quiz-button";
+    edit.textContent = "編輯";
+    edit.setAttribute("aria-label", `編輯 ${word.english}`);
+    edit.addEventListener("click", () => openWordEditor(word.id));
+    item.append(description, edit);
+    list.append(item);
+  }
+  const empty = document.querySelector("#word-list-empty");
+  empty.textContent = words.length ? "找不到符合的單字。" : "這個單元還沒有單字。";
+  empty.hidden = matches.length > 0;
+}
+
+function showWordManager() {
+  document.querySelector("#word-manager-unit").textContent =
+    `${unitNames.get(selectedUnitId)} · ${formatWordCount(selectedUnitWords().length)}`;
+  renderManagedWords();
+  showScreen(wordManager);
+  window.scrollTo(0, 0);
+  document.querySelector("#word-manager-title").focus();
+}
+
+function addCheckbox(container, name, value, text, checked) {
+  const label = document.createElement("label");
+  label.className = "word-check";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.name = name;
+  input.value = value;
+  input.checked = checked;
+  const caption = document.createElement("span");
+  caption.textContent = text;
+  label.append(input, caption);
+  container.append(label);
+}
+
+function wordMeanings(data) {
+  return String(data.get("meanings")).split(/\r?\n/).map(meaning => meaning.trim()).filter(Boolean);
+}
+
+function updateQuizChoices() {
+  const data = new FormData(wordForm);
+  for (const [field, choices] of [["quizPart", data.getAll("part")], ["quizMeaning", wordMeanings(data)]]) {
+    const select = wordForm.elements[field];
+    const previous = select.value;
+    select.replaceChildren(new Option("請選擇", ""));
+    for (const value of new Set(choices)) select.add(new Option(value, value));
+    if (choices.includes(previous)) select.value = previous;
+  }
+}
+
+function openWordEditor(wordId = null) {
+  const word = wordsById.get(wordId);
+  const settings = activeBank.quizSettings;
+  const setting = Object.hasOwn(settings.wordSettings, wordId) ? settings.wordSettings[wordId] : null;
+  const originalParts = word?.partOfSpeech.trim().split(/\s*&\s*/) ?? [];
+  const forms = word?.verbForms ?? setting?.supplementalVerbForms;
+  const fields = wordForm.elements;
+  wordForm.reset();
+  fields.english.value = word?.english ?? "";
+  fields.meanings.value = word?.chineseMeanings.join("\n") ?? "";
+  fields.material.value = word?.source.material ?? "";
+  fields.page.value = word?.source.page ?? "";
+  fields.verification.value = word?.verificationStatus ?? "unverified";
+  for (const name of ["base", "past", "pastParticiple"]) fields[name].value = forms?.[name] ?? "";
+  fields.formsSource.value = word?.verbForms ? "original" : "supplemental";
+
+  const parts = document.querySelector("#word-parts");
+  parts.replaceChildren();
+  for (const part of new Set([...originalParts, ...formParts])) {
+    addCheckbox(parts, "part", part, part, originalParts.includes(part));
+  }
+  const exclusions = document.querySelector("#word-exclusions");
+  exclusions.replaceChildren();
+  const excluded = new Set(settings.excludedPairs.filter(pair => pair.includes(wordId)).flat());
+  for (const other of selectedUnitWords()) {
+    if (other.id === wordId) continue;
+    addCheckbox(exclusions, "exclude", other.id, describeWord(other), excluded.has(other.id));
+  }
+  if (!exclusions.childElementCount) exclusions.textContent = "同單元尚無其他單字。";
+  updateQuizChoices();
+  fields.quizPart.value = setting?.sense?.partOfSpeech ?? "";
+  fields.quizMeaning.value = setting?.sense?.meaning ?? "";
+  wordAdvanced.open = false;
+  document.querySelector("#word-editor-title").textContent = word ? "編輯單字" : "新增單字";
+  startEditor(wordEditor, wordForm, wordId);
+}
+
+function buildWordDraft(isEditing) {
+  const data = new FormData(wordForm);
+  const value = field => String(data.get(field)).trim();
+  const parts = data.getAll("part");
+  const partOfSpeech = value("quizPart");
+  const meaning = value("quizMeaning");
+  const forms = { base: value("base"), past: value("past"), pastParticiple: value("pastParticiple") };
+  const hasForms = Object.values(forms).some(Boolean);
+  const word = {
+    english: value("english"), chineseMeanings: wordMeanings(data), partOfSpeech: parts.join(" & "),
+    source: { material: value("material"), page: value("page") || null },
+    verificationStatus: value("verification"),
+  };
+  if (!word.english || !word.chineseMeanings.length || !word.source.material) {
+    throw new Error("請填寫英文單字、中文意思及教材來源。");
+  }
+  if (!parts.length) throw new Error("請至少勾選一個詞性。");
+  if (word.verificationStatus === "verified" && !word.source.page) {
+    throw new Error("標記為已核對時，請填寫教材頁碼。");
+  }
+  const quizSettings = {};
+  const hasSense = Boolean(partOfSpeech && meaning);
+  const missingSense = (parts.length > 1 || partOfSpeech || meaning) && !hasSense;
+  const needsForms = hasForms || verbParts.has(partOfSpeech || parts[0]);
+  if (missingSense || (needsForms && !Object.values(forms).every(Boolean))) {
+    wordAdvanced.open = true;
+    throw new Error(missingSense ? "請完整選擇出題詞性與對應的中文意思。" :
+      "請完整填寫動詞原形、過去式和過去分詞。");
+  }
+  if (hasForms && (forms.base !== word.english || !parts.some(part => verbParts.has(part)))) {
+    wordAdvanced.open = true;
+    throw new Error("動詞原形須與英文單字完全相同，並勾選至少一個動詞詞性。");
+  }
+  if (hasSense) quizSettings.sense = { partOfSpeech, meaning };
+  else if (isEditing) quizSettings.sense = null;
+  if (hasForms && value("formsSource") === "original") word.verbForms = forms;
+  else if (isEditing) word.verbForms = null;
+  if (hasForms && value("formsSource") === "supplemental") quizSettings.supplementalVerbForms = forms;
+  else if (isEditing) quizSettings.supplementalVerbForms = null;
+  if (!isEditing) word.unitId = selectedUnitId;
+  return { word, quizSettings, excludedWordIds: data.getAll("exclude") };
+}
+
+function clearDuplicate() {
+  duplicateDraft = null;
+  wordDuplicate.hidden = true;
+}
+
+function saveWord(confirmed = null) {
+  const { id } = editor;
+  let draft;
+  showFormError(wordForm);
+  clearDuplicate();
+  try {
+    draft = buildWordDraft(id !== null);
+    const storage = createBankStorage();
+    if (confirmed) {
+      const current = (storage.read() ?? activeBank).words.find(word => word.id === confirmed.word.id);
+      if (JSON.stringify(current) !== JSON.stringify(confirmed.word)) {
+        throw new Error("原有詞條已更新，請重新按下儲存並核對內容。");
+      }
+      draft.mergeIntoWordId = confirmed.word.id;
+      draft.excludedWordIds = draft.excludedWordIds.filter(other => other !== confirmed.word.id);
+    }
+    const saved = id === null ? storage.addWord(activeBank, draft) : storage.updateWord(activeBank, id, draft);
+    applyBank(saved);
+    finishEditor();
+    wordSearch.value = "";
+    showWordManager();
+  } catch (error) {
+    if (error instanceof DuplicateWordError && error.canMerge && !confirmed) {
+      try {
+        const bank = createBankStorage().read() ?? activeBank;
+        const word = bank.words.find(record => record.id === error.existingWordId);
+        if (word) {
+          duplicateDraft = { word };
+          document.querySelector("#duplicate-existing").textContent = describeWord(word);
+          document.querySelector("#duplicate-incoming").textContent = describeWord(draft.word);
+          wordDuplicate.hidden = false;
+          document.querySelector("#duplicate-title").focus();
+          return;
+        }
+      } catch (readError) {
+        showFormError(wordForm, readError.message);
+        return;
+      }
+    }
+    showFormError(wordForm, error.message);
+  }
 }
 
 async function loadDefaultBank() {
@@ -680,6 +989,37 @@ async function prepareOffline() {
 }
 
 document.querySelector("#back-button").addEventListener("click", showHome);
+document.querySelector("#add-unit").addEventListener("click", () => openUnitEditor());
+document.querySelector("#edit-unit").addEventListener("click", () => openUnitEditor(selectedUnitId));
+document.querySelector("#manage-words").addEventListener("click", showWordManager);
+document.querySelector("#back-from-words").addEventListener("click", showUnitDetail);
+document.querySelector("#add-word").addEventListener("click", () => openWordEditor());
+wordSearch.addEventListener("input", renderManagedWords);
+for (const button of document.querySelectorAll("[data-cancel-editor]")) {
+  button.addEventListener("click", cancelEditor);
+}
+for (const form of [unitForm, wordForm]) {
+  form.addEventListener("input", event => {
+    if (form === wordForm) {
+      if (["part", "meanings"].includes(event.target.name)) updateQuizChoices();
+      clearDuplicate();
+    }
+    if (formSnapshot(form) === editor.initial) window.removeEventListener("beforeunload", warnOnUnload);
+    else window.addEventListener("beforeunload", warnOnUnload);
+  });
+}
+unitForm.addEventListener("submit", saveUnit);
+wordForm.addEventListener("submit", event => {
+  event.preventDefault();
+  saveWord();
+});
+document.querySelector("#confirm-word-merge").addEventListener("click", () => {
+  if (duplicateDraft) saveWord(duplicateDraft);
+});
+document.querySelector("#cancel-word-merge").addEventListener("click", () => {
+  clearDuplicate();
+  wordForm.querySelector('[type="submit"]').focus();
+});
 chooseBank.addEventListener("click", () => bankFile.click());
 bankFile.addEventListener("change", previewBankImport);
 document.querySelector("#confirm-bank").addEventListener("click", confirmBankImport);
@@ -717,7 +1057,7 @@ window.addEventListener("pagehide", () => {
     showScreen(reviewScreen);
     renderReview();
   } else {
-    showScreen(detail);
+    showUnitDetail();
   }
 });
 start();
