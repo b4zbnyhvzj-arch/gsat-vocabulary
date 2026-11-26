@@ -1,5 +1,5 @@
 const scope = new URL(self.registration.scope);
-const cacheName = `gsat-ocr-lab:${scope.pathname}:v0.7.1`;
+const cacheName = `gsat-ocr-lab:${scope.pathname}:v0.7.3`;
 const manifestURL = new URL("assets.json", scope).href;
 const names = new Set(["paddle", "tesseract"]);
 const assetURL = path => {
@@ -8,15 +8,52 @@ const assetURL = path => {
   return url.href;
 };
 
+const hex = data => Array.from(new Uint8Array(data), byte=>byte.toString(16).padStart(2,"0")).join("");
+async function reuseEngineAssets(cache, info) {
+  // The stable public release and the previous local build share this scope,
+  // but have different shell caches. Never consult the formal App caches.
+  const known=new Set(await caches.keys());
+  const entries=[...new Map(Object.values(info.engines).flat().map(item=>[item.path,item])).values()];
+  for(const version of ["v0.7.2","v0.7.1"]){
+    const label=`gsat-ocr-lab:${scope.pathname}:${version}`;
+    if(!known.has(label))continue;
+    const old=await caches.open(label);
+    const manifest=await old.match(manifestURL);
+    if(!manifest)continue;
+    const prior=await manifest.json().catch(()=>null);
+    if(prior?.version!==version.slice(1))continue;
+    const declared=new Map(Object.values(prior.engines??{}).flat().map(item=>[item.path,item]));
+    for(const item of entries){
+      const previous=declared.get(item.path);
+      if(previous?.sha256!==item.sha256||previous.bytes!==item.bytes)continue;
+      const url=assetURL(item.path);
+      if(await cache.match(url))continue;
+      const response=await old.match(url);
+      if(!response?.ok)continue;
+      const bytes=await response.arrayBuffer();
+      if(bytes.byteLength!==item.bytes||hex(await crypto.subtle.digest("SHA-256",bytes))!==item.sha256)continue;
+      // Cache writes can fail on quota-limited devices. Keep the old
+      // installed release available if migration cannot complete.
+      try {
+        await cache.put(url,new Response(bytes,{headers:{"Content-Type":response.headers.get("Content-Type")??"application/octet-stream"}}));
+      } catch(error) {
+        if(error.name!=="QuotaExceededError")throw error;
+        return;
+      }
+    }
+  }
+}
+
 self.addEventListener("install", event => {
   event.waitUntil((async () => {
     const manifest = await fetch(manifestURL, { cache: "reload" });
     if (!manifest.ok) throw new Error("缺少 OCR 資源清單。");
     const info = await manifest.clone().json();
-    if (info.version !== "0.7.1") throw new Error("OCR 資源版本不符。");
+    if (info.version !== "0.7.3") throw new Error("OCR 資源版本不符。");
     const cache = await caches.open(cacheName);
     await cache.addAll(info.shell.map(asset => new Request(assetURL(asset.path), { cache: "reload" })));
     await cache.put(manifestURL, manifest);
+    await reuseEngineAssets(cache,info);
   })());
 });
 self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
