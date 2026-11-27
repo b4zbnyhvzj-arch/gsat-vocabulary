@@ -1,5 +1,5 @@
 const scope = new URL(self.registration.scope);
-const cacheName = `gsat-ocr-lab:${scope.pathname}:v0.7.3`;
+const cacheName = `gsat-ocr-lab:${scope.pathname}:v0.7.5`;
 const manifestURL = new URL("assets.json", scope).href;
 const names = new Set(["paddle", "tesseract"]);
 const assetURL = path => {
@@ -14,7 +14,7 @@ async function reuseEngineAssets(cache, info) {
   // but have different shell caches. Never consult the formal App caches.
   const known=new Set(await caches.keys());
   const entries=[...new Map(Object.values(info.engines).flat().map(item=>[item.path,item])).values()];
-  for(const version of ["v0.7.2","v0.7.1"]){
+  for(const version of ["v0.7.4","v0.7.3","v0.7.2","v0.7.1"]){
     const label=`gsat-ocr-lab:${scope.pathname}:${version}`;
     if(!known.has(label))continue;
     const old=await caches.open(label);
@@ -49,7 +49,7 @@ self.addEventListener("install", event => {
     const manifest = await fetch(manifestURL, { cache: "reload" });
     if (!manifest.ok) throw new Error("缺少 OCR 資源清單。");
     const info = await manifest.clone().json();
-    if (info.version !== "0.7.3") throw new Error("OCR 資源版本不符。");
+    if (info.version !== "0.7.5") throw new Error("OCR 資源版本不符。");
     const cache = await caches.open(cacheName);
     await cache.addAll(info.shell.map(asset => new Request(assetURL(asset.path), { cache: "reload" })));
     await cache.put(manifestURL, manifest);

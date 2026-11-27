@@ -1,10 +1,10 @@
 {
-  "version": "0.7.3",
+  "version": "0.7.5",
   "shell": [
     {
       "path": "index.html",
-      "bytes": 4198,
-      "sha256": "dca5127c639f7400fb55b0635d32e44f2676c1c00ac01714d2adb16f0e84919f"
+      "bytes": 4791,
+      "sha256": "8d3ea4a73b8fce951aeea4dc7737e8648ba2d9e2dc23287a950707b0f77a3f78"
     },
     {
       "path": "style.css",
@@ -13,8 +13,8 @@
     },
     {
       "path": "lab.js",
-      "bytes": 23999,
-      "sha256": "bf29f005476ad987143a22e7c498854803e525175fbe73fa6d056d4b7da193c7"
+      "bytes": 35435,
+      "sha256": "91b88a256b38201b53c739795c14d62de990fcfb61ecf7b888e5b4d59e20aafe"
     },
     {
       "path": "chunk-ZWRDP37E.js",

@@ -22,6 +22,10 @@
         <label>輸入長邊<select id="resolution"><option value="2048">2048 px</option><option value="1600">1600 px（低記憶體）</option><option value="0">原始大小</option></select></label>
       </div>
       <label>測試模式<select id="runs"><option value="1">單次</option><option value="5">連續五次（同一張）</option></select></label>
+      <label>教材模式<select id="selection-mode">
+        <option value="auto">自動判斷</option><option value="red">紅色大字</option><option value="black">黑色粗體</option>
+      </select></label>
+      <label class="select-check"><input id="local-retry" type="checkbox">黑色粗體漏辨時嘗試局部 OCR</label>
       <p id="resource-size" role="status"></p>
       <div class="photo-actions">
         <button id="recognize" disabled>開始辨識</button>
@@ -40,12 +44,11 @@
     </section>
     <section id="headwords" hidden>
       <div class="result-head"><h2>教材主單字</h2></div>
-      <label>教材模式<select id="selection-mode">
-        <option value="auto">自動判斷</option><option value="red">紅色大字</option><option value="black">黑色粗體</option>
-      </select></label>
       <p id="selection-status" role="status"></p>
+      <p id="page-timings"></p>
       <div id="selection-content" hidden>
         <div class="result-head"><p id="selection-count" role="status"></p><button id="export-selection" type="button">匯出主單字 JSON</button></div>
+        <button id="add-page-record" type="button">將本頁加入測試紀錄</button>
         <form id="manual-form">
           <label>補入漏辨的英文單字 <input id="manual-word" type="text" lang="en" autocomplete="off" autocapitalize="off" required></label>
           <button type="submit">新增單字</button>
@@ -56,6 +59,12 @@
         <details open><summary id="selection-review-label"></summary><ol id="selection-review" class="selection-list"></ol></details>
         <details><summary id="selection-excluded-label"></summary><ol id="selection-excluded" class="selection-list"></ol></details>
       </div>
+    </section>
+    <section aria-labelledby="session-pages-title">
+      <div class="result-head"><h2 id="session-pages-title">本次多頁測試</h2>
+        <button id="export-pages" type="button" disabled>匯出全部頁面 JSON</button></div>
+      <p id="session-page-count" role="status">已加入 0 頁</p>
+      <ol id="session-page-list"></ol>
     </section>
     <section id="history" hidden>
       <div class="result-head"><h2>測試紀錄</h2><button id="export" type="button">匯出 JSON</button></div>
