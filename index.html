@@ -16,6 +16,7 @@
     <main class="shell">
       <header class="page-header">
         <h1>學測單字</h1>
+        <p class="app-version">v0.8.1</p>
       </header>
 
       <p id="load-status" class="notice" role="status">正在載入單字資料…</p>
@@ -37,6 +38,8 @@
         <section class="bank-panel" aria-label="私人題庫">
           <div class="bank-actions">
             <button id="choose-bank" type="button" class="quiz-button quiz-button-primary">匯入題庫</button>
+            <button id="open-photo-import" type="button" class="quiz-button quiz-button-primary">拍照匯入單字</button>
+            <button id="backup-learning" type="button" class="quiz-button">備份題庫與學習紀錄</button>
             <button id="export-bank" type="button" class="quiz-button">匯出私人題庫</button>
           </div>
           <input id="bank-file" type="file" accept=".json,application/json" hidden>
@@ -51,6 +54,11 @@
           </div>
         </section>
 
+        <div class="app-update">
+          <button id="check-update" type="button" class="quiz-button">檢查更新</button>
+          <p id="update-status" role="status"></p>
+        </div>
+
         <section class="catalog" aria-labelledby="catalog-title">
           <div class="management-heading">
             <h2 id="catalog-title">單元</h2>
@@ -60,6 +68,65 @@
           <div id="unit-groups"></div>
         </section>
       </div>
+
+      <section id="photo-import" aria-labelledby="photo-title" hidden>
+        <button id="photo-back" type="button" class="back-button">返回單元</button>
+        <div class="management-card photo-panel">
+          <h2 id="photo-title" tabindex="-1">拍照匯入單字</h2>
+          <p>照片在這部裝置處理。完成核對後才會寫入題庫。</p>
+          <div class="photo-pickers">
+            <label class="quiz-button">拍照<input id="photo-camera" type="file" accept="image/*" capture="environment"></label>
+            <label class="quiz-button">選取一張或多張照片<input id="photo-album" type="file" accept="image/*" multiple></label>
+          </div>
+          <label>目標單元 <select id="photo-target"></select></label>
+          <div id="photo-new-unit"><label>新單元名稱 <input id="photo-unit"></label></div>
+          <label>教材來源 <input id="photo-material"></label>
+          <label>教材模式 <select id="photo-mode">
+            <option value="auto">自動判斷</option>
+            <option value="red">紅色大字</option>
+            <option value="black">黑色粗體</option>
+          </select></label>
+          <label class="photo-check">嘗試局部二次 OCR <input id="photo-local-retry" type="checkbox"></label>
+          <div class="management-actions">
+            <button id="photo-download" type="button" class="quiz-button">下載離線模型</button>
+            <button id="photo-run" type="button" class="quiz-button quiz-button-primary" disabled>開始辨識</button>
+            <button id="photo-retry" type="button" class="quiz-button" disabled>重試失敗／停止頁面</button>
+            <button id="photo-stop" type="button" class="quiz-button" disabled>停止處理</button>
+          </div>
+          <p id="photo-model-status" role="status"></p>
+          <progress id="photo-progress" value="0" max="1" aria-label="照片處理進度"></progress>
+          <p id="photo-progress-text"></p>
+          <p id="photo-status" role="alert"></p>
+          <ol id="photo-pages"></ol>
+        </div>
+        <div class="management-card photo-panel">
+          <h2>確認詞條</h2>
+          <p id="photo-counts" role="status"></p>
+          <button id="photo-confirm-clean" type="button" class="quiz-button">確認批次內無警告詞條</button>
+          <div id="photo-page-review" hidden>
+            <h3 id="photo-page-title" tabindex="-1"></h3>
+            <p id="photo-page-mode"></p>
+            <label>本頁教材頁碼 <input id="photo-page-label"></label>
+            <details id="photo-view">
+              <summary>原圖對照</summary>
+              <div class="photo-original"><img id="photo-image" alt="本頁教材照片"><svg id="photo-mark" aria-hidden="true"></svg></div>
+              <p id="photo-raw"></p>
+            </details>
+            <details><summary>調整要收錄的主單字</summary><div id="photo-heads"></div></details>
+            <label>人工補入漏辨單字 <input id="photo-manual-word" lang="en" autocapitalize="off"></label>
+            <button id="photo-add-word" type="button" class="quiz-button">補入單字</button>
+            <div id="photo-entries"></div>
+          </div>
+        </div>
+        <div class="management-card photo-panel">
+          <h2>批次匯入</h2>
+          <button id="photo-preview-import" type="button" class="quiz-button">預覽匯入</button>
+          <div id="photo-duplicates"></div>
+          <p id="photo-import-count" role="alert"></p>
+          <p id="photo-quiz-note" role="status"></p>
+          <button id="photo-commit" type="button" class="quiz-button quiz-button-primary" hidden>確認匯入題庫</button>
+        </div>
+      </section>
 
       <section id="unit-detail" class="detail" aria-labelledby="detail-title" hidden>
         <button id="back-button" type="button" class="back-button">返回單元</button>
@@ -117,6 +184,11 @@
             <legend>詞性（可複選）</legend>
             <div id="word-parts" class="word-parts"></div>
           </fieldset>
+          <details id="word-senses" hidden>
+            <summary>逐義詞性與詞義</summary>
+            <p class="management-note">在這裡修改已有來源的義項。上方中文欄供其餘義項使用。</p>
+            <div id="word-sense-rows"></div>
+          </details>
           <label>教材來源 <input name="material" required></label>
           <div class="field-columns">
             <label>頁碼 <input name="page" placeholder="已核對時必填"></label>

@@ -6,7 +6,7 @@ const partsOfSpeech = new Set([
   ...verbParts, "n.", "a.", "adj.", "adv.", "pron.", "prep.", "conj.", "interj.", "art.", "det.", "aux.", "phr.",
 ]);
 const unitFields = ["name", "textbook", "level", "unitNumber", "expectedWordCount"];
-const wordFields = ["english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms"];
+const wordFields = ["english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms", "senses"];
 
 const isRecord = value => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = value => typeof value === "string" && value.trim().length > 0;
@@ -26,6 +26,24 @@ function validForms(forms, word, parts) {
   return onlyFields(forms, ["base", "past", "pastParticiple"]) &&
     forms.base === word.english && isText(forms.past) && isText(forms.pastParticiple) &&
     parts.some(part => verbParts.has(part));
+}
+
+function validSenseSource(source) {
+  return onlyFields(source, ["material", "page", "image", "raw", "polygon", "width", "height"]) &&
+    isText(source.material) && optionalText(source.page) && optionalText(source.image) && optionalText(source.raw) &&
+    (source.polygon === undefined || (optionalCount(source.width, 1) && optionalCount(source.height, 1) &&
+      source.width > 0 && source.height > 0 && Array.isArray(source.polygon) && source.polygon.length === 4 &&
+      source.polygon.every(point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))));
+}
+
+function validSenses(senses, word, parts) {
+  return Array.isArray(senses) && senses.every(sense =>
+    onlyFields(sense, ["partOfSpeech", "meaning", "countability", "plural", "sources"]) &&
+    parts.includes(sense.partOfSpeech) && word.chineseMeanings.includes(sense.meaning) &&
+    (sense.countability === undefined || (Array.isArray(sense.countability) &&
+      sense.countability.every(value => ["countable", "uncountable"].includes(value)))) &&
+    (sense.plural == null || ["fixed", "plural"].includes(sense.plural)) &&
+    (sense.sources === undefined || (Array.isArray(sense.sources) && sense.sources.every(validSenseSource))));
 }
 
 function pairKey(pair) {
@@ -106,6 +124,7 @@ export function validateBank(bank) {
     if (Object.hasOwn(word, "verbForms")) {
       requireBank(validForms(word.verbForms, word, parts), `原始動詞三態無效（${id}）。`);
     }
+    requireBank(word.senses === undefined || validSenses(word.senses, word, parts), "逐義資料無效（"+id+"）。");
     words.set(id, word);
     wordParts.set(id, parts);
   }
@@ -124,6 +143,27 @@ export function parseBank(text) {
   return validateBank(bank);
 }
 
+export function mergeSenses(...lists) {
+  const combined=new Map();
+  for(const sense of lists.flat()) {
+    const key=JSON.stringify([sense.partOfSpeech,sense.meaning,[...new Set(sense.countability??[])].sort(),sense.plural??null]);
+    const previous=combined.get(key);
+    if(!previous) combined.set(key,sense);
+    else if(previous.sources||sense.sources) {
+      const sources=new Map([...previous.sources??[],...sense.sources??[]].map(source=>[JSON.stringify(source),source]));
+      combined.set(key,{...previous,sources:[...sources.values()]});
+    }
+  }
+  return [...combined.values()];
+}
+
+export function recordHasSense(word, setting) {
+  if(!setting || !word.chineseMeanings.includes(setting.meaning) ||
+      !word.partOfSpeech.split(/\s*&\s*/).includes(setting.partOfSpeech)) return false;
+  const associated=word.senses?.filter(sense=>sense.meaning===setting.meaning);
+  return !associated?.length||associated.some(sense=>sense.partOfSpeech===setting.partOfSpeech);
+}
+
 export function mergeBanks(current, incoming) {
   validateBank(current);
   validateBank(incoming);
@@ -136,7 +176,8 @@ export function mergeBanks(current, incoming) {
     if (existing && (existing.unitId !== word.unitId || existing.english !== word.english)) {
       throw new Error(`單字 ID 已屬於其他詞條（${word.id}），無法匯入。`);
     }
-    words.set(word.id, word);
+    const preserved=existing?.senses?.filter(sense=>recordHasSense({...word,senses:undefined},sense));
+    words.set(word.id,preserved?.length?{...word,senses:mergeSenses(word.senses??[],preserved)}:word);
   }
   const pairs = new Map([...current.quizSettings.excludedPairs, ...incoming.quizSettings.excludedPairs]
     .map(pair => [pairKey(pair), pair]));
@@ -195,6 +236,10 @@ function findDuplicateWord(words, word) {
 function makeWord(current, fields) {
   const word = { ...current, ...fields };
   if (word.verbForms === null) delete word.verbForms;
+  if (current.senses && fields && !Object.hasOwn(fields,"senses")) {
+    const parts=word.partOfSpeech.split(/\s*&\s*/);
+    word.senses=current.senses.filter(sense=>parts.includes(sense.partOfSpeech)&&word.chineseMeanings.includes(sense.meaning));
+  }
   return word;
 }
 
@@ -258,6 +303,7 @@ function mergeDuplicateWord(bank, existing, draft, changes) {
   const splitParts = value => value.trim().split(/\s*&\s*/);
   return {
     ...existing,
+    ...(existing.senses||draft.senses ? {senses:mergeSenses(existing.senses??[],draft.senses??[])} : {}),
     chineseMeanings: [...new Set([...existing.chineseMeanings, ...draft.chineseMeanings])],
     partOfSpeech: [...new Set([...splitParts(existing.partOfSpeech), ...splitParts(draft.partOfSpeech)])].join(" & "),
     verificationStatus: existing.verificationStatus === "verified" && draft.verificationStatus === "verified"
@@ -381,5 +427,12 @@ export function createBankStorage(storage) {
     });
   }
 
-  return { read, importBank, addUnit, updateUnit, addWord, addWords, updateWord };
+  function commitBatch(current, expected, candidate) {
+    if (JSON.stringify(read() ?? current) !== expected) {
+      throw new Error("題庫已有變更，請重新預覽這次匯入。");
+    }
+    return write(validateBank(candidate));
+  }
+
+  return { read, importBank, commitBatch, addUnit, updateUnit, addWord, addWords, updateWord };
 }

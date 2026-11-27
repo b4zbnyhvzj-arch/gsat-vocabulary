@@ -1,0 +1,21 @@
+OCR Lab distribution notices
+
+PaddleOCR.js 0.4.2 and PP-OCRv5 mobile detection/recognition models: Apache-2.0.
+The package's published gitHead is e5046169b225bcdfbe25d45b4e809ff0f1a69c2c.
+The original ONNX model archives carry Apache-2.0 in their README metadata.
+https://github.com/PaddlePaddle/PaddleOCR/blob/e5046169b225bcdfbe25d45b4e809ff0f1a69c2c/LICENSE
+
+ONNX Runtime Web 1.24.3: MIT. LICENSE and ThirdPartyNotices from the same release's
+official onnxruntime 1.24.3 Python distribution.
+https://pypi.org/project/onnxruntime/1.24.3/
+
+OpenCV.js, js-yaml and Clipper are PaddleOCR.js dependencies. Package notices
+are included; Clipper uses Boost Software License 1.0.
+
+Tesseract.js and its WebAssembly port 7.0.0: Apache-2.0. See npm package license
+files and bundled SDK notices. Tesseract tessdata_fast eng and chi_tra:
+Apache-2.0, commit 87416418657359cb625c412a48b6e1d6d41c29bd.
+https://github.com/tesseract-ocr/tessdata_fast/tree/87416418657359cb625c412a48b6e1d6d41c29bd
+
+The models' source URLs, byte counts and SHA-256 checksums are locked in the
+private development copy's models.json. Neither OCR implementation is modified.

@@ -1,7 +1,9 @@
-const VERSION = "v0.6.2";
+const VERSION = "v0.8.1";
 const scope = new URL(self.registration.scope);
 const cachePrefix = `gsat-vocabulary:${scope.href}:`;
 const cacheName = cachePrefix + VERSION;
+const ocrRuntime=new URL("./ocr-runtime/",scope);
+const ocrCache="gsat-photo-ocr:"+ocrRuntime.href+":paddle-0.4.2-r1";
 const index = new URL("./index.html", scope);
 const assets = [
   "./index.html",
@@ -10,6 +12,20 @@ const assets = [
   "./quiz.js",
   "./storage.js",
   "./bank.js",
+  "./photo-import-ui.js",
+  "./photo-batch.js",
+  "./photo-ocr.js",
+  "./ocr-assets.js",
+  "./ocr-lab/selection.js",
+  "./ocr-lab/black-selection.js",
+  "./ocr-lab/entry-bands.js",
+  "./ocr-lab/local-recovery.js",
+  "./ocr-lab/page-records.js",
+  "./ocr-lab/entry-parser.js",
+  "./ocr-lab/entry-forms.js",
+  "./ocr-lab/entry-review.js",
+  "./ocr-lab/entry-candidate.js",
+  "./ocr-lab/selection-review.js",
   "./data/units.json",
   "./data/words.json",
   "./data/quiz-settings.json",
@@ -31,9 +47,6 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   // No skipWaiting: an installed update waits until existing clients are closed.
   event.waitUntil((async () => {
-    const keys = await caches.keys();
-    const previous = keys.filter(key => key.startsWith(cachePrefix) && key !== cacheName);
-    await Promise.all(previous.map(key => caches.delete(key)));
     await self.clients.claim();
   })());
 });
@@ -42,6 +55,10 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
 
   const url = new URL(event.request.url);
+  if (url.href.startsWith(ocrRuntime.href)) {
+    event.respondWith(caches.match(url.href,{cacheName:ocrCache}).then(response=>response??fetch(event.request)));
+    return;
+  }
   const appNavigation = event.request.mode === "navigate" && url.origin === scope.origin &&
     (url.pathname === scope.pathname || url.pathname === index.pathname);
   if (!appNavigation && !assetUrls.has(url.href)) return;
