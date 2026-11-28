@@ -1,8 +1,8 @@
 import {isBaseOnlyVerb} from "./verb-lexicon.js";
 import { validateBank, prepareAddedWords, mergeSenses, recordHasSense } from "./bank.js";
 import {errorDetails} from "./ocr-task.js";
-import { candidateBank } from "./ocr-app-v084/entry-candidate.js";
-import { candidateReviewPlan } from "./ocr-app-v084/entry-review.js";
+import { candidateBank } from "./ocr-app-v086/entry-candidate.js";
+import { candidateReviewPlan, entryIssues, setEntryConfirmed } from "./ocr-app-v086/entry-review.js";
 
 const wordKey=value=>value.trim().normalize("NFC").toLowerCase();
 const union=(a,b)=>[...new Set([...a,...b])];
@@ -89,13 +89,23 @@ function sourceDetails(page, refs, fallback) {
   }));
 }
 
+// Selection preferences belong to one page and survive rebuilding its parsed rows.
+export const photoSelectionKey=word=>wordKey(word.rawOriginalEnglish??word.originalEnglish);
+export const photoWordValid=word=>!entryIssues(word).some(issue=>issue.blocking);
+export const photoWordSelected=(selection,word)=>selection.get(photoSelectionKey(word))??photoWordValid(word);
+
 export function groupPhotoWords(pages) {
   const grouped=new Map();
   let pending=0;
   for (const page of pages) {
-    const counts=candidateReviewPlan(page.words);
-    pending+=counts.pending;
-    for (const row of page.words.filter(row=>row.confirmed)) {
+    const explicit=page.importSelection;
+    const rows=explicit? page.words.filter(word=>photoWordSelected(explicit,word)&&photoWordValid(word)):
+      page.words.filter(word=>word.confirmed);
+    pending+=explicit? page.words.filter(word=>!photoWordValid(word)).length:candidateReviewPlan(page.words).pending;
+    for (const selected of rows) {
+      // The Lab serializer still uses its review flag. Adapt a copy at that boundary.
+      const row=explicit?{...selected}:selected;
+      if(explicit) setEntryConfirmed(row,true);
       const key=wordKey(row.english);
       const semantic=row.senses.map(sense=>({...sense,meaning:sense.meaning.trim(),
         sources:sourceDetails(page,sense.sources,row.sources)}));

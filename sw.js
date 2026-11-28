@@ -1,4 +1,4 @@
-const VERSION = "v0.8.4";
+const VERSION = "v0.8.6";
 const scope = new URL(self.registration.scope);
 const cachePrefix = `gsat-vocabulary:${scope.href}:`;
 const cacheName = cachePrefix + VERSION;
@@ -25,16 +25,17 @@ const assets = [
   "./vendor/opencc/STPhrases.txt",
   "./photo-red-recovery.js",
   "./photo-gloss-recovery.js",
-  "./ocr-app-v084/selection.js",
-  "./ocr-app-v084/black-selection.js",
-  "./ocr-app-v084/entry-bands.js",
-  "./ocr-app-v084/local-recovery.js",
-  "./ocr-app-v084/page-records.js",
-  "./ocr-app-v084/entry-parser.js",
-  "./ocr-app-v084/entry-forms.js",
-  "./ocr-app-v084/entry-review.js",
-  "./ocr-app-v084/entry-candidate.js",
-  "./ocr-app-v084/selection-review.js",
+  "./ocr-app-v086/selection.js",
+  "./ocr-app-v086/black-selection.js",
+  "./ocr-app-v086/entry-bands.js",
+  "./ocr-app-v086/local-recovery.js",
+  "./ocr-app-v086/page-records.js",
+  "./ocr-app-v086/entry-parser.js",
+  "./ocr-app-v086/entry-evidence.js",
+  "./ocr-app-v086/entry-forms.js",
+  "./ocr-app-v086/entry-review.js",
+  "./ocr-app-v086/entry-candidate.js",
+  "./ocr-app-v086/selection-review.js",
   "./data/units.json",
   "./data/words.json",
   "./data/quiz-settings.json",

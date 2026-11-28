@@ -4,12 +4,12 @@ import {deadline,errorDetails} from "./ocr-task.js";
 import {traditionalConverter} from "./photo-traditional.js";
 import {quizReadyWords} from "./bank.js";
 import {createQuiz} from "./quiz.js";
-import {createPhotoQueue, groupPhotoWords, duplicatePhotoWords, preparePhotoImport} from "./photo-batch.js";
+import {createPhotoQueue, groupPhotoWords, duplicatePhotoWords, preparePhotoImport, photoSelectionKey, photoWordSelected, photoWordValid} from "./photo-batch.js";
 import {createPhotoEngine} from "./photo-ocr.js";
 import {photoResources} from "./ocr-assets.js";
-import {parseEntries, PARTS, isVerb} from "./ocr-app-v084/entry-parser.js";
-import {createReview, selectionExport} from "./ocr-app-v084/selection-review.js";
-import {entryIssues, orderedEntries, selectImportable, reviewSummary} from "./ocr-app-v084/entry-review.js";
+import {parseEntries, PARTS, isVerb} from "./ocr-app-v086/entry-parser.js";
+import {createReview, selectionExport} from "./ocr-app-v086/selection-review.js";
+import {entryIssues, orderedEntries, selectImportable} from "./ocr-app-v086/entry-review.js";
 
 const el=id=>document.getElementById(id);
 const node=(tag,text)=>{
@@ -44,6 +44,18 @@ function select(value,options,edit) {
 
 export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
   let events=[], removed=[], imports=[], lastReport=null, verified=false, converter;
+  const selections=new WeakMap();
+  function selectionFor(page) {
+    if(!selections.has(page)) selections.set(page,new Map());
+    return selections.get(page);
+  }
+  function initializeSelection(page,words) {
+    const selection=selectionFor(page);
+    for(const word of words) {
+      const key=photoSelectionKey(word);
+      if(!selection.has(key)) selection.set(key,photoWordValid(word));
+    }
+  }
   const log=(type,data={})=>events.push({type,at:new Date().toISOString(),...data});
   const engine=createPhotoEngine(()=>({mode:"auto",retry:true,
     longSide:Number(el("photo-resolution").value)}),log);
@@ -91,7 +103,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       if (page.result&&["failed","cancelled"].includes(page.state)) row.append(button("使用上次可用結果",()=>{
         if(working) return;
         page.state="done";page.error="";
-        log("previous-result-restored",{page:page.id});invalidate();renderProgress();openPage(page);
+        log("previous-result-restored",{page:page.id});invalidate();renderProgress();openPage(page);refreshPreview();
       }));
       if (page.attempts.length) {
         const retry=button("重新辨識第 "+page.id+" 頁",()=>void run({scan:true,pageId:page.id}));
@@ -137,7 +149,10 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       }
       if (!scan||signal.aborted) return;
       status("正在循序辨識照片…");
-      await queue.run({retry,pageId,onChange:renderProgress});
+      await queue.run({retry,pageId,onChange:page=>{
+        renderProgress();
+        if(page?.state==="done") updateCounts();
+      }});
       if(queue.pages.some(page=>page.state==="failed"&&/模型／WASM/.test(page.error))) verified=false;
       status(queue.pages.some(page=>page.state==="failed")?
         "有照片辨識失敗。已完成的頁面仍可核對。":"已停止或完成本次辨識，可繼續核對。");
@@ -160,6 +175,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     const review=createReview();
     review.sync(result.selection.entries);
     const old=page.words??[];
+    const rawKey=word=>key(word.rawOriginalEnglish??word.originalEnglish);
     const edits=new Map((page.review?.changes()??[]).map(edit=>[key(edit.originalWord),edit]));
     for(const entry of result.selection.entries) {
       const edit=edits.get(key(entry.word));
@@ -169,7 +185,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       }
     }
     for(const word of old.filter(word=>word.edited||String(word.id).startsWith("manual-"))) {
-      if(!review.final().some(item=>key(item.word)===key(word.originalEnglish))) review.add(word.originalEnglish);
+      if(!review.final().some(item=>key(item.word)===rawKey(word))) review.add(word.originalEnglish);
     }
     const selection=selectionExport(result.ocr,result.selection,review);
     const worker=new Worker(new URL("./photo-parser-worker.js",import.meta.url),{type:"module"});
@@ -181,24 +197,26 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
         worker.onmessageerror=()=>reject(new Error("詞條解析結果無法讀取。"));
         worker.postMessage({...selection,recovery:result.recovery});
       }));
-      const bySpelling=new Map(old.map(word=>[key(word.originalEnglish),word]));
-      return {review,automatic:structuredClone(parsed),previous:page.words?{words:structuredClone(old),automatic:page.automatic}:null,
-        words:parsed.words.map(word=>{
-          const prior=bySpelling.get(key(word.originalEnglish));
-          return selectImportable(prior?.edited||String(prior?.id).startsWith("manual-")?
-            {...prior,id:word.id,strictGloss:true}:word);
-        })};
+      const bySpelling=new Map(old.map(word=>[rawKey(word),word]));
+      const words=parsed.words.map(word=>{
+        const prior=bySpelling.get(rawKey(word));
+        return selectImportable(prior?.edited||String(prior?.id).startsWith("manual-")?
+          {...prior,id:word.id,strictGloss:true}:word);
+      });
+      if(!signal.aborted) initializeSelection(page,words);
+      return {review,automatic:structuredClone(parsed),previous:page.words?{words:structuredClone(old),automatic:page.automatic}:null,words};
     } finally {worker.terminate();}
   }
   function rebuild(page) {
     const selection=selectionExport(page.result.ocr,page.result.selection,page.review);
     const parsed=applyGlossRecovery(parseEntries({...selection,recovery:page.result.recovery},
-      {strict:true,automaticImport:true,standardize:converter}),page.result.recovery,converter);
+      {strict:true,automaticImport:true,integrateEvidence:true,standardize:converter}),page.result.recovery,converter);
     const old=new Map(page.words.map(word=>[word.id,word]));
     page.words=parsed.words.map(word=>{
       const prior=old.get(word.id);
       return selectImportable(prior?.originalEnglish===word.originalEnglish?prior:word);
     });
+    initializeSelection(page,page.words);
     refreshPreview();
   }
   function removePreviewImage(){
@@ -280,22 +298,26 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     const review=new Set(entries.filter(entry=>entry.status==="review"&&entry.word&&
       !page.review?.get(entry.id).checked).map(entry=>key(entry.word))).size;
     const words=page.words??[];
-    const {confirmed}=reviewSummary(words);
+    const selected=words.filter(word=>photoWordSelected(selectionFor(page),word)).length;
+    const confirmed=words.filter(word=>photoWordSelected(selectionFor(page),word)&&photoWordValid(word)).length;
     const pending=words.filter(word=>entryIssues(word).some(issue=>issue.blocking)).length;
-    return {automatic,unselectedReview:review,pending,confirmed};
+    return {automatic,unselectedReview:review,pending,selected,confirmed};
   }
   function updatePageComparison(){
     if(!current?.result) return;
     const count=countsFor(current),expected=Number(current.expected)||0;
     el("photo-page-comparison").textContent="已辨識 "+count.automatic+" · 待人工修正 "+count.pending+
-      " · 可匯入 "+count.confirmed+(expected?" · 預期 "+expected+(count.automatic!==expected?"（數量不符，請補查）":""):"")+
+      " · 已選取 "+count.selected+" · 可匯入 "+count.confirmed+(expected?" · 預期 "+expected+(count.automatic!==expected?"（數量不符，請補查）":""):"")+
       (current.previous?" · 上次選取 "+current.previous.words.length+" 筆，人工修正已保留。":"");
   }
   function updateCounts(){
     updatePageComparison();
     const pages=queue.pages.filter(page=>page.words);
     const words=pages.flatMap(page=>page.words);
-    const {confirmed}=reviewSummary(words);
+    for(const id of ["photo-select-all","photo-clear-selection"]) el(id).disabled=!words.length;
+    const counts=pages.map(countsFor);
+    const selected=counts.reduce((sum,count)=>sum+count.selected,0);
+    const confirmed=counts.reduce((sum,count)=>sum+count.confirmed,0);
     const pending=words.filter(word=>entryIssues(word).some(issue=>issue.blocking)).length;
     const grouped=new Map();
     for (const word of words) {
@@ -306,31 +328,37 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     const unitWords=new Set(readBank().words.filter(word=>word.unitId===el("photo-target").value)
       .map(word=>word.english.trim().normalize("NFC").toLowerCase()));
     const existing=[...grouped.keys()].filter(key=>unitWords.has(key)).length;
-    el("photo-counts").textContent="可匯入 "+confirmed+" · 缺少必要資料 "+pending+
+    el("photo-counts").textContent="已選取 "+selected+" · 可匯入 "+confirmed+" · 缺少必要資料 "+pending+
       " · 批次同拼字 "+crossPage+" · 單元重複 "+existing;
   }
   function wordCard(word) {
+    const row=node("article");
+    row.className="photo-word";
     const card=node("details");
-    card.className="photo-word";
-    card.open=!word.confirmed;
-    const title=node("summary");
+    card.open=!photoWordValid(word);
+    const title=node("summary","編輯詞條");
+    const selection=selectionFor(current);
     const warnings=node("ul");
     warnings.className="photo-warnings";
     const checked=node("input");
     checked.type="checkbox";
-    const checkLabel=field("匯入這筆詞條",checked);
+    const checkText=node("span");
+    const checkLabel=node("label");
+    checkLabel.append(checked,checkText);
     checkLabel.className="photo-check";
     const refresh=()=>{
       const issues=entryIssues(word).filter(issue=>issue.blocking);
-      title.textContent=word.english+" · "+(word.confirmed?"可匯入":issues.length?"需補資料":"不匯入");
-      checked.checked=word.confirmed;
-      checked.disabled=issues.some(issue=>issue.blocking);
+      checked.checked=photoWordSelected(selection,word);
+      checkText.textContent=word.english+(issues.length?" · 需補資料":"");
+      checked.setAttribute("aria-label","匯入 "+word.english);
       warnings.replaceChildren(...issues.map(issue=>node("li",issue.message)));
       warnings.hidden=!issues.length;
-      updateCounts();
     };
-    const edit=()=>{word.edited=true;selectImportable(word);refresh();refreshPreview();};
-    checked.addEventListener("change",()=>{word.includeInImport=checked.checked;edit();});
+    const edit=()=>{word.edited=true;selectImportable(word);refresh();updateCounts();refreshPreview();};
+    checked.addEventListener("change",()=>{
+      selection.set(photoSelectionKey(word),checked.checked);
+      updateCounts();refreshPreview();
+    });
     card.append(title,warnings,field("英文",text(word.english,value=>{word.english=value;edit();})));
     for (const [index,sense] of word.senses.entries()) {
       const group=node("fieldset");
@@ -392,14 +420,14 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       source.append(node("summary","原始 OCR"),node("p",ref.text),button("看原圖",()=>showSource(ref)));
       card.append(source);
     }
-    card.append(forms,checkLabel);refresh();
-    return card;
+    card.append(forms);row.append(checkLabel,card);refresh();
+    return row;
   }
   function renderEntries() {
     entries.replaceChildren(...orderedEntries(current?.words??[]).map(wordCard));
     updateCounts();
   }
-  const payload=()=>queue.pages.filter(page=>page.words&&page.state==="done").map(page=>({words:page.words,
+  const payload=()=>queue.pages.filter(page=>page.words&&page.state==="done").map(page=>({words:page.words,importSelection:selectionFor(page),
     material:sourceMaterial(),page:page.page.trim(),image:"第 "+page.id+" 張 · "+page.file.name,
     original:page.result.ocr.original}));
   const sourceMaterial=()=>readBank().units.find(unit=>unit.id===el("photo-target").value)?.textbook||"照片匯入";
@@ -462,6 +490,14 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     invalidate();renderProgress();
     if(queue.pages.some(page=>page.state==="queued")) void run({scan:true});
   });
+  for(const [id,selected] of [["photo-select-all",true],["photo-clear-selection",false]]) {
+    el(id).addEventListener("click",()=>{
+      for(const page of queue.pages) {
+        for(const word of page.words??[]) selectionFor(page).set(photoSelectionKey(word),selected&&photoWordValid(word));
+      }
+      renderEntries();refreshPreview();
+    });
+  }
   el("photo-run").addEventListener("click",()=>void run({scan:true}));
   el("photo-retry").addEventListener("click",()=>void run({scan:true,retry:true}));
   el("photo-download").addEventListener("click",()=>void run({scan:false}));
@@ -492,7 +528,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       const saved=commit(preview);
       const oldBank=JSON.parse(preview.expected), summary=preview.summary;
       imports.push({at:new Date().toISOString(),unitId:preview.unitId,summary,choices:{...decisions},
-        pages:payload().map(page=>({page:page.page,image:page.image,words:page.words.filter(word=>word.confirmed).map(word=>word.english)})),
+        pages:payload().map(page=>({page:page.page,image:page.image,words:page.words.filter(word=>photoWordSelected(page.importSelection,word)&&photoWordValid(word)).map(word=>word.english)})),
         written:saved.words.filter(word=>word.unitId===preview.unitId&&
           JSON.stringify(word)!==JSON.stringify(oldBank.words.find(prior=>prior.id===word.id)))
           .map(word=>({id:word.id,english:word.english})),
@@ -506,14 +542,14 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     } catch(error) {status(error.message,true);invalidate();}
   });
   function pageReport(page){
-    const words=(page.words??[]).map(word=>({...word,issues:entryIssues(word)}));
+    const words=(page.words??[]).map(word=>({...word,selectedForImport:photoWordSelected(selectionFor(page),word),issues:entryIssues(word)}));
     return {id:page.id,file:page.file.name,type:page.file.type,bytes:page.file.size,page:page.page,
       state:page.state,expected:page.expected??null,counts:countsFor(page),error:page.error??null,
       attempts:page.attempts,automatic:page.automatic,manual:page.review?.changes(),words,
       previous:page.previous,uiErrors:page.uiErrors};
   }
   function report(){
-    return {appVersion:"0.8.4",schemaVersion:1,createdAt:new Date().toISOString(),
+    return {appVersion:"0.8.6",schemaVersion:1,createdAt:new Date().toISOString(),
       model:"PaddleOCR.js 0.4.2 · PP-OCRv5 Mobile · WASM 1 thread",
       pages:[...removed,...queue.pages.map(pageReport)],events,imports};
   }

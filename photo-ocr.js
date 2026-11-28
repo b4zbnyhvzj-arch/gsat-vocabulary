@@ -1,11 +1,11 @@
-import {selectHeadwords} from "./ocr-app-v084/selection.js";
-import {recoverMissing,recoveryRegions} from "./ocr-app-v084/local-recovery.js";
-import {keepPrimarySelection} from "./ocr-app-v084/page-records.js";
+import {selectHeadwords} from "./ocr-app-v086/selection.js";
+import {recoverMissing,recoveryRegions} from "./ocr-app-v086/local-recovery.js";
+import {keepPrimarySelection} from "./ocr-app-v086/page-records.js";
 import {OCR_RUNTIME} from "./ocr-assets.js";
 import {createEngineSession} from "./photo-engine-session.js";
-import {redRecoveryRegions} from "./photo-red-recovery.js";
+import {redRecoveryRegions,insideRedSeed,closerRedCrop} from "./photo-red-recovery.js";
 import {glossRecoveryRegions} from "./photo-gloss-recovery.js";
-import {parseEntries} from "./ocr-app-v084/entry-parser.js";
+import {parseEntries} from "./ocr-app-v086/entry-parser.js";
 import {abortError,deadline,errorDetails} from "./ocr-task.js";
 
 const engineUrl=new URL("engine-v082.js",OCR_RUNTIME);
@@ -65,24 +65,42 @@ export function createPhotoEngine(options,log=()=>{}) {
       progress(stage);
       primary=analyze(ocr,canvas,mode);
       timings.selectionMs=primary.elapsedMs;
-      if(!retry||!["black","red"].includes(primary.mode)) return {ocr,selection:primary,recovery:null,timings,longSide};
+      if(!retry||(!["black","red"].includes(primary.mode)&&!primary.modeUncertain)) return {ocr,selection:primary,recovery:null,timings,longSide};
       stage="局部二次辨識";
       progress(stage);
       const selected=primary.entries.filter(entry=>entry.status==="selected"&&entry.word);
       const draft=parseEntries({ocr,selection:primary,final:{words:selected.map(entry=>({id:entry.id,word:entry.word,source:"ocr"}))}},
-        {strict:true,automaticImport:true});
-      const headings=primary.mode==="red"?
+        {strict:true,automaticImport:true,integrateEvidence:true});
+      const headings=primary.mode!=="black"?
         redRecoveryRegions(context.getImageData(0,0,canvas.width,canvas.height),ocr.original,primary):
         recoveryRegions(primary,ocr.original);
       const glosses=glossRecoveryRegions(draft,ocr.original);
-      const cropped=[...glosses.filter(crop=>crop.score>1),...headings,...glosses.filter(crop=>crop.score===1)].slice(0,2);
+      const early=headings.find(crop=>crop.early);
+      const strong=glosses.filter(crop=>crop.score>1);
+      const cropped=(early&&strong.length<2?[early,...strong,closerRedCrop(early,ocr.original),...headings.filter(crop=>crop!==early)]:
+        [...strong,...headings,...glosses.filter(crop=>crop.score===1)]).slice(0,2);
       const {output,recovery}=await keepPrimarySelection(primary,
         ()=>recoverMissing(ocr,photo,primary,region=>session.predict(region,signal),{
           stop:()=>session.release("局部辨識停止",false),regions:cropped,signal,
           decode:image=>deadline("局部圖片解碼",3500,signal,()=>image.decode()),
         }),
         items=>{
-          const second=analyze({...ocr,items:items.filter(item=>item.ocrSource!=="gloss-retry")},canvas,mode);
+          const inputs=items.filter(item=>item.ocrSource!=="gloss-retry");
+          const second=analyze({...ocr,items:inputs},canvas,mode);
+          for(const entry of second.entries) {
+            const crop=inputs[entry.id]?.redCrop;
+            const inside=crop&&insideRedSeed(entry,crop);
+            if(inside&&crop.early&&entry.status==="review"&&entry.bare&&entry.redInk>=.67&&
+                entry.redCoverage>=.055&&entry.ocrConfidence>=.85&&/^[a-z]{3,}$/i.test(entry.word)) {
+              entry.status="selected";
+              entry.reasons.push("紅色頁首詞頭像素吻合；保留供補齊詞性與詞義");
+              continue;
+            }
+            if(entry.status==="selected"&&crop&&(!inside||!entry.phonetics||!entry.partOfSpeech)) {
+              entry.status="review";
+              entry.reasons.push("局部辨識的詞頭與紅色像素位置或詞條結構未充分吻合");
+            }
+          }
           {
             const selected=new Map(primary.entries.filter(entry=>entry.status==="selected").map(entry=>[entry.id,entry]));
             second.entries=second.entries.map(entry=>selected.get(entry.id)??entry);

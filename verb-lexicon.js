@@ -2,6 +2,7 @@
 // defective "beware"; Oxford lists "outfitted" for the compound "outfit".
 const baseOnly = new Set(["beware"]);
 const exceptions = Object.freeze({
+  format: ["formatted", "formatted"],
   outfit: ["outfitted", "outfitted"],
   fit: ["fitted/fit", "fitted/fit"],
 });

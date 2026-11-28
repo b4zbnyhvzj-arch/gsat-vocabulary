@@ -1002,7 +1002,7 @@ function backupLearning() {
     const bank=createBankStorage().read()??activeBank;
     if(!bank) return;
     const history={mistakes:study.getMistakes(),quizResults:study.getQuizResults()};
-    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.4",createdAt:new Date().toISOString(),
+    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.6",createdAt:new Date().toISOString(),
       localStorage:{[BANK_STORAGE_KEY]:bank,[STORAGE_KEY]:history}},"GSAT-Vocabulary-backup.json");
   } catch(error) {showBankStatus("備份失敗。"+error.message,true);}
 }

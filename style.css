@@ -729,3 +729,5 @@ button .unit-meta {
 
 .home-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .home-summary > div { padding-inline: .55rem; }
+
+.photo-word > .photo-check{justify-content:flex-start;cursor:pointer;overflow-wrap:anywhere;font-weight:700}
