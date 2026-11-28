@@ -1,7 +1,7 @@
 const VERSION = "v0.8.3";
 const scope = new URL(self.registration.scope);
 const cachePrefix = `gsat-vocabulary:${scope.href}:`;
-const cacheName = cachePrefix + VERSION;
+const cacheName = cachePrefix + VERSION + ":r2";
 const ocrRuntime=new URL("./ocr-runtime/",scope);
 const ocrCache="gsat-photo-ocr:"+ocrRuntime.href+":paddle-0.4.2-r1";
 const index = new URL("./index.html", scope);

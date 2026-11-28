@@ -758,7 +758,10 @@ function draftLexicalFields(data, word) {
 
 function updateQuizChoices() {
   const data = new FormData(wordForm);
-  for (const [field, choices] of [["quizPart", data.getAll("part")], ["quizMeaning", wordMeanings(data)]]) {
+  for (const [field, choices] of [
+    ["quizPart", [...data.getAll("part"), ...data.getAll("linkedPart")]],
+    ["quizMeaning", [...wordMeanings(data), ...data.getAll("linkedMeaning").map(value => value.trim()).filter(Boolean)]],
+  ]) {
     const select = wordForm.elements[field];
     const previous = select.value;
     select.replaceChildren(new Option("請選擇", ""));
@@ -809,7 +812,7 @@ function openWordEditor(wordId = null) {
 
 function buildWordDraft(isEditing) {
   const data = new FormData(wordForm);
-  const value = field => String(data.get(field)).trim();
+  const value = field => String(data.get(field) ?? "").trim();
   const {parts,meanings,senses}=draftLexicalFields(data,wordsById.get(editor?.id));
   const partOfSpeech = value("quizPart");
   const meaning = value("quizMeaning");
