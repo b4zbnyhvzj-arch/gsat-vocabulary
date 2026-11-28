@@ -1,3 +1,5 @@
+import {isBaseOnlyVerb} from "./verb-lexicon.js";
+
 export const BANK_SCHEMA_VERSION = 1;
 export const BANK_STORAGE_KEY = "gsat-vocabulary:bank:v1";
 
@@ -78,7 +80,7 @@ function validateQuizSettings(settings, words, wordParts) {
       requireBank(verbParts.has(answerPart)&&!word.verbForms&&!setting?.supplementalVerbForms,
         "暫不出題的動詞資格無效（"+id+"）。");
     }
-    requireBank(!verbParts.has(answerPart) || word.verbForms || setting?.supplementalVerbForms || word.pendingVerbForms,
+    requireBank(!verbParts.has(answerPart) || isBaseOnlyVerb(word.english) || word.verbForms || setting?.supplementalVerbForms || word.pendingVerbForms,
       `動詞缺少完整三態（${id}）。`);
   }
 

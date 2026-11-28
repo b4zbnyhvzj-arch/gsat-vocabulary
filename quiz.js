@@ -1,3 +1,5 @@
+import {isBaseOnlyVerb} from "./verb-lexicon.js";
+
 const verbParts = new Set(["v.", "vt.", "vi."]);
 
 function shuffled(items, random) {
@@ -56,7 +58,7 @@ function selectOptions(answer, candidates, exclusions) {
 }
 
 function createQuestion(answer, pool, random, exclusions) {
-  const isVerb = verbParts.has(answer.partOfSpeech);
+  const isVerb = verbParts.has(answer.partOfSpeech) && !isBaseOnlyVerb(answer.word.english);
   if (isVerb && !answer.verbText) {
     throw new Error(`無法出題：${answer.word.english} 缺少完整動詞三態。`);
   }

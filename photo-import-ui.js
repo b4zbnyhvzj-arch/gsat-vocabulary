@@ -1,3 +1,5 @@
+import {applyGlossRecovery} from "./photo-gloss-recovery.js";
+import {isBaseOnlyVerb} from "./verb-lexicon.js";
 import {deadline,errorDetails} from "./ocr-task.js";
 import {traditionalConverter} from "./photo-traditional.js";
 import {quizReadyWords} from "./bank.js";
@@ -5,9 +7,9 @@ import {createQuiz} from "./quiz.js";
 import {createPhotoQueue, groupPhotoWords, duplicatePhotoWords, preparePhotoImport} from "./photo-batch.js";
 import {createPhotoEngine} from "./photo-ocr.js";
 import {photoResources} from "./ocr-assets.js";
-import {parseEntries, PARTS, isVerb, fragmentKind} from "./ocr-app-v083/entry-parser.js";
-import {createReview, selectionExport} from "./ocr-app-v083/selection-review.js";
-import {entryIssues, orderedEntries, setEntryConfirmed, confirmCleanEntries, reviewSummary} from "./ocr-app-v083/entry-review.js";
+import {parseEntries, PARTS, isVerb} from "./ocr-app-v084/entry-parser.js";
+import {createReview, selectionExport} from "./ocr-app-v084/selection-review.js";
+import {entryIssues, orderedEntries, selectImportable, reviewSummary} from "./ocr-app-v084/entry-review.js";
 
 const el=id=>document.getElementById(id);
 const node=(tag,text)=>{
@@ -43,11 +45,11 @@ function select(value,options,edit) {
 export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
   let events=[], removed=[], imports=[], lastReport=null, verified=false, converter;
   const log=(type,data={})=>events.push({type,at:new Date().toISOString(),...data});
-  const engine=createPhotoEngine(()=>({mode:el("photo-mode").value,retry:el("photo-local-retry").checked,
+  const engine=createPhotoEngine(()=>({mode:"auto",retry:true,
     longSide:Number(el("photo-resolution").value)}),log);
   const queue=createPhotoQueue(engine.recognize,preparePage);
   let current=null, imageUrl=null, working=false, cancelDownload=null, statusCheck=null, preview=null;
-  let decisions=Object.create(null);
+  let decisions=Object.create(null), previewScheduled=false;
   const pageList=el("photo-pages"), entries=el("photo-entries");
   const status=(message,error=false)=>{
     el("photo-status").textContent=message;
@@ -58,6 +60,12 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     el("photo-commit").hidden=true;
     el("photo-import-count").textContent="";
     el("photo-quiz-note").textContent="";
+  }
+  function refreshPreview(){
+    invalidate();
+    if (working||previewScheduled) return;
+    previewScheduled=true;
+    queueMicrotask(()=>{previewScheduled=false;if(!working) prepare();});
   }
   function renderProgress(){
     const finished=queue.pages.filter(page=>page.state==="done").length;
@@ -71,7 +79,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     el("photo-retry").disabled=working||!queue.pages.some(page=>["failed","cancelled"].includes(page.state));
     el("photo-stop").disabled=!working;
     el("photo-new-batch").disabled=working;
-    for (const id of ["photo-album","photo-camera","photo-mode","photo-local-retry","photo-resolution","photo-download","photo-preview-import"]) {
+    for (const id of ["photo-album","photo-camera","photo-resolution","photo-download"]) {
       el(id).disabled=working;
     }
     pageList.replaceChildren(...queue.pages.map(page=>{
@@ -94,7 +102,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
         removed.push({...pageReport(page),removed:true});
         queue.remove(page.id);
         if(current===page) clearPage();
-        invalidate();renderProgress();updateCounts();
+        invalidate();renderProgress();updateCounts();refreshPreview();
       });
       remove.disabled=working;row.append(remove);
       return row;
@@ -144,7 +152,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     } finally {
       try {await engine.release();}
       catch(error) {log("release-error",{error:errorDetails(error)});}
-      finally {working=false;cancelDownload=null;renderProgress();updateCounts();}
+      finally {working=false;cancelDownload=null;renderProgress();updateCounts();refreshPreview();}
     }
   }
   const key=value=>String(value??"").trim().normalize("NFKC").toLowerCase();
@@ -160,7 +168,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
         catch(error) {log("preserve-head",{page:page.id,error:errorDetails(error)});}
       }
     }
-    for(const word of old.filter(word=>word.edited||word.confirmed||String(word.id).startsWith("manual-"))) {
+    for(const word of old.filter(word=>word.edited||String(word.id).startsWith("manual-"))) {
       if(!review.final().some(item=>key(item.word)===key(word.originalEnglish))) review.add(word.originalEnglish);
     }
     const selection=selectionExport(result.ocr,result.selection,review);
@@ -174,23 +182,24 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
         worker.postMessage({...selection,recovery:result.recovery});
       }));
       const bySpelling=new Map(old.map(word=>[key(word.originalEnglish),word]));
-      return {review,automatic:parsed,previous:page.words?{words:structuredClone(old),automatic:page.automatic}:null,
+      return {review,automatic:structuredClone(parsed),previous:page.words?{words:structuredClone(old),automatic:page.automatic}:null,
         words:parsed.words.map(word=>{
           const prior=bySpelling.get(key(word.originalEnglish));
-          return prior?.edited||prior?.confirmed||String(prior?.id).startsWith("manual-")?
-            {...prior,id:word.id,strictGloss:true}:word;
+          return selectImportable(prior?.edited||String(prior?.id).startsWith("manual-")?
+            {...prior,id:word.id,strictGloss:true}:word);
         })};
     } finally {worker.terminate();}
   }
   function rebuild(page) {
     const selection=selectionExport(page.result.ocr,page.result.selection,page.review);
-    const parsed=parseEntries({...selection,recovery:page.result.recovery},{strict:true,standardize:converter});
+    const parsed=applyGlossRecovery(parseEntries({...selection,recovery:page.result.recovery},
+      {strict:true,automaticImport:true,standardize:converter}),page.result.recovery,converter);
     const old=new Map(page.words.map(word=>[word.id,word]));
     page.words=parsed.words.map(word=>{
       const prior=old.get(word.id);
-      return prior?.originalEnglish===word.originalEnglish?prior:word;
+      return selectImportable(prior?.originalEnglish===word.originalEnglish?prior:word);
     });
-    invalidate();
+    refreshPreview();
   }
   function removePreviewImage(){
     el("photo-image").removeAttribute("src");
@@ -204,7 +213,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     el("photo-page-review").hidden=false;
     el("photo-page-title").textContent="核對第 "+page.id+" 頁";
     el("photo-page-mode").textContent=page.result.selection.modeUncertain?
-      "版式判斷不確定，可選擇教材模式後重新加入照片。":"教材模式："+(page.result.selection.mode==="red"?"紅色大字":"黑色粗體");
+      "版式判斷不確定，可重新拍攝或手動調整收錄詞條。":"教材模式："+(page.result.selection.mode==="red"?"紅色大字":"黑色粗體");
     el("photo-page-label").value=page.page;
     el("photo-expected").value=page.expected??"";
     el("photo-old-result").hidden=!page.previous;
@@ -270,8 +279,10 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     const automatic=new Set(entries.filter(entry=>entry.status==="selected"&&entry.word).map(entry=>key(entry.word))).size;
     const review=new Set(entries.filter(entry=>entry.status==="review"&&entry.word&&
       !page.review?.get(entry.id).checked).map(entry=>key(entry.word))).size;
-    const {pending,confirmed}=reviewSummary(page.words??[]);
-    return {automatic,unselectedReview:review,pending:pending+review,confirmed};
+    const words=page.words??[];
+    const {confirmed}=reviewSummary(words);
+    const pending=words.filter(word=>entryIssues(word).some(issue=>issue.blocking)).length;
+    return {automatic,unselectedReview:review,pending,confirmed};
   }
   function updatePageComparison(){
     if(!current?.result) return;
@@ -284,7 +295,8 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     updatePageComparison();
     const pages=queue.pages.filter(page=>page.words);
     const words=pages.flatMap(page=>page.words);
-    const {confirmed,pending,flagged}=reviewSummary(words);
+    const {confirmed}=reviewSummary(words);
+    const pending=words.filter(word=>entryIssues(word).some(issue=>issue.blocking)).length;
     const grouped=new Map();
     for (const word of words) {
       const key=word.english.trim().normalize("NFC").toLowerCase();
@@ -294,9 +306,8 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     const unitWords=new Set(readBank().words.filter(word=>word.unitId===el("photo-target").value)
       .map(word=>word.english.trim().normalize("NFC").toLowerCase()));
     const existing=[...grouped.keys()].filter(key=>unitWords.has(key)).length;
-    el("photo-counts").textContent="已確認 "+confirmed+" · 待確認 "+pending+"（"+flagged+
-      " 有警告） · 批次同拼字 "+crossPage+" · 單元重複 "+existing;
-    el("photo-confirm-clean").disabled=!words.some(word=>!word.confirmed&&!entryIssues(word).length);
+    el("photo-counts").textContent="可匯入 "+confirmed+" · 缺少必要資料 "+pending+
+      " · 批次同拼字 "+crossPage+" · 單元重複 "+existing;
   }
   function wordCard(word) {
     const card=node("details");
@@ -307,40 +318,32 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     warnings.className="photo-warnings";
     const checked=node("input");
     checked.type="checkbox";
-    const checkLabel=field("已核對詞義及警告",checked);
+    const checkLabel=field("匯入這筆詞條",checked);
     checkLabel.className="photo-check";
     const refresh=()=>{
-      const issues=entryIssues(word);
-      title.textContent=word.english+" · "+(word.confirmed?"已確認":issues.length?"需核對":"待確認");
+      const issues=entryIssues(word).filter(issue=>issue.blocking);
+      title.textContent=word.english+" · "+(word.confirmed?"可匯入":issues.length?"需補資料":"不匯入");
       checked.checked=word.confirmed;
       checked.disabled=issues.some(issue=>issue.blocking);
       warnings.replaceChildren(...issues.map(issue=>node("li",issue.message)));
       warnings.hidden=!issues.length;
       updateCounts();
     };
-    const edit=()=>{word.edited=true;setEntryConfirmed(word,false);invalidate();refresh();};
-    checked.addEventListener("change",()=>{word.edited=true;setEntryConfirmed(word,checked.checked);invalidate();refresh();});
+    const edit=()=>{word.edited=true;selectImportable(word);refresh();refreshPreview();};
+    checked.addEventListener("change",()=>{word.includeInImport=checked.checked;edit();});
     card.append(title,warnings,field("英文",text(word.english,value=>{word.english=value;edit();})));
     for (const [index,sense] of word.senses.entries()) {
       const group=node("fieldset");
       group.append(node("legend","義項 "+(index+1)),
         field("詞性",select(sense.part,[["","選擇詞性"],...PARTS.map(part=>[part,part])],value=>{
           sense.part=value;
-          forms.hidden=!word.senses.some(item=>isVerb(item.part));
+          forms.hidden=isBaseOnlyVerb(word.english)||!word.senses.some(item=>isVerb(item.part));
           edit();
         })),
         field("中文詞義",text(sense.meaning,value=>{
           sense.meaning=converter?converter(value):value;
-          sense.shortGlossVerified=false;single.checked=false;
-          singleLabel.hidden=fragmentKind(sense.meaning)!=="short";edit();
+          sense.shortGlossVerified=false;edit();
         },true)));
-      const single=node("input");
-      single.type="checkbox";single.checked=sense.shortGlossVerified===true;
-      single.addEventListener("change",()=>{sense.shortGlossVerified=single.checked;edit();});
-      const singleLabel=field("已對照原圖，此單一漢字即完整詞義",single);
-      singleLabel.className="photo-check";
-      singleLabel.hidden=fragmentKind(sense.meaning)!=="short";
-      group.append(singleLabel);
       const primary=node("input");
       primary.type="radio";primary.name="photo-primary-"+word.id;primary.checked=word.primary===index;
       primary.addEventListener("change",()=>{word.primary=index;edit();});
@@ -363,7 +366,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       edit();renderEntries();
     }));
     const forms=node("fieldset");
-    forms.hidden=!word.senses.some(sense=>isVerb(sense.part));
+    forms.hidden=isBaseOnlyVerb(word.english)||!word.senses.some(sense=>isVerb(sense.part));
     forms.append(node("legend","動詞三態"));
     for (const [key,label] of [["base","原形"],["past","過去式"],["pastParticiple","過去分詞"]]) {
       forms.append(field(label,text(word.verbForms?.[key]??(key==="base"?word.english:""),value=>{
@@ -397,28 +400,36 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     updateCounts();
   }
   const payload=()=>queue.pages.filter(page=>page.words&&page.state==="done").map(page=>({words:page.words,
-    material:el("photo-material").value.trim(),page:page.page.trim(),image:"第 "+page.id+" 張 · "+page.file.name,
+    material:sourceMaterial(),page:page.page.trim(),image:"第 "+page.id+" 張 · "+page.file.name,
     original:page.result.ocr.original}));
-  const target=()=>({id:el("photo-target").value,name:el("photo-unit").value,material:el("photo-material").value});
+  const sourceMaterial=()=>readBank().units.find(unit=>unit.id===el("photo-target").value)?.textbook||"照片匯入";
+  const target=()=>({id:el("photo-target").value,name:el("photo-unit").value,material:sourceMaterial()});
   function prepare() {
     invalidate();
     try {
       const bank=readLatest(), data=payload();
-      if (!target().material.trim()) throw new Error("請填寫教材來源。");
       const {grouped}=groupPhotoWords(data);
-      if (grouped.size===0) throw new Error("請先核對並勾選要匯入的詞條。");
+      if(!grouped.size) {el("photo-duplicates").hidden=true;return;}
+      if(!target().id&&!target().name.trim()) {
+        el("photo-import-count").textContent="請選擇單元或填寫新單元名稱。";return;
+      }
       const duplicates=duplicatePhotoWords(bank,target().id,grouped);
-      const controls=duplicates.map(({key,incoming,existing})=>{
+      const policy=el("photo-duplicate-policy").value;
+      decisions=Object.fromEntries(duplicates.map(({key})=>[key,policy]));
+      el("photo-duplicates").hidden=!duplicates.length;
+      el("photo-duplicate-warning").hidden=policy==="keep";
+      el("photo-duplicate-warning").textContent=policy==="replace"?
+        "此選擇會覆寫所有重複詞條的詞義，包含人工修正。原有 ID 及學習紀錄會保留。":
+        "原有詞義會保留，新詞義將加入同一詞條。";
+      el("photo-duplicate-rows").replaceChildren(...duplicates.map(({incoming,existing})=>{
         const row=node("section");
         row.append(node("h3",incoming.english),node("p","原詞義："+existing.chineseMeanings.join("、")),
-          node("p","新詞義："+incoming.senses.map(sense=>sense.part+" "+sense.meaning).join("、")),
-          field("重複單字處理",select(decisions[key]??"keep",[["keep","保留原資料"],["merge","合併新詞義"],
-            ["replace","確認更新既有資料"]],value=>{decisions[key]=value;prepare();})));
+          node("p","新詞義："+incoming.senses.map(sense=>sense.part+" "+sense.meaning).join("、")));
         return row;
-      });
-      el("photo-duplicates").replaceChildren(...controls);
+      }));
       preview=preparePhotoImport(bank,target(),data,decisions);
-      const {added,updated,skipped,pending}=preview.summary;
+      const {added,updated,skipped}=preview.summary;
+      const pending=queue.pages.reduce((sum,page)=>sum+countsFor(page).pending,0);
       const incomplete=queue.pages.filter(page=>page.state!=="done").length;
       const totals=queue.pages.reduce((sum,page)=>{
         const counts=countsFor(page);
@@ -428,12 +439,12 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
             (expected!==counts.automatic||expected!==counts.confirmed))};
       },{expected:0,automatic:0,review:0,gaps:0});
       el("photo-import-count").textContent="新增 "+added+" · 更新 "+updated+" · 略過重複 "+skipped+
-        " · 待確認 "+pending+" · 未完成照片 "+incomplete+" · 已辨識 "+totals.automatic+
+        " · 缺少必要資料 "+pending+" · 未完成照片 "+incomplete+" · 已辨識 "+totals.automatic+
         " · 實際將匯入 "+(added+updated)+
         (preview.bank.words.some(word=>word.unitId===preview.unitId&&word.pendingVerbForms)?" · 本單元有三態待補詞條":"")+(totals.expected?" · 已填預期合計 "+totals.expected:"")+
         (totals.gaps?" · "+totals.gaps+" 頁需補查":"")+(totals.review?" · 未勾選候選 "+totals.review:"");
       if (added+updated===0) {
-        status("沒有將寫入的詞條。可調整重複單字處理方式。");
+        el("photo-import-count").append("。可以調整重複策略。");
         return;
       }
       try {
@@ -443,22 +454,22 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
         el("photo-quiz-note").textContent="詞條仍可匯入。測驗暫不可用："+error.message;
       }
       el("photo-commit").hidden=false;
-      el("photo-commit").textContent=pending||incomplete||totals.review||totals.gaps?"確認先匯入已核對項目":"確認匯入題庫";
-      status("");
+      el("photo-commit").textContent="匯入 "+(added+updated)+" 筆詞條";
     } catch(error) {status(error.message,true);}
   }
   for (const id of ["photo-album","photo-camera"]) el(id).addEventListener("change",event=>{
     queue.add(event.target.files);event.target.value="";
     invalidate();renderProgress();
+    if(queue.pages.some(page=>page.state==="queued")) void run({scan:true});
   });
   el("photo-run").addEventListener("click",()=>void run({scan:true}));
   el("photo-retry").addEventListener("click",()=>void run({scan:true,retry:true}));
   el("photo-download").addEventListener("click",()=>void run({scan:false}));
   el("photo-stop").addEventListener("click",()=>{cancelDownload?.abort();queue.cancel();status("正在停止…");});
   el("photo-expected").addEventListener("input",event=>{
-    current.expected=event.target.value;invalidate();updatePageComparison();
+    current.expected=event.target.value;refreshPreview();updatePageComparison();
   });
-  el("photo-page-label").addEventListener("input",event=>{current.page=event.target.value;invalidate();});
+  el("photo-page-label").addEventListener("input",event=>{current.page=event.target.value;refreshPreview();});
   el("photo-add-word").addEventListener("click",()=>{
     try {
       current.review.add(el("photo-manual-word").value);
@@ -466,18 +477,17 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       rebuild(current);renderHeads();renderEntries();
     } catch(error) {status(error.message,true);}
   });
-  el("photo-confirm-clean").addEventListener("click",()=>{
-    confirmCleanEntries(queue.pages.flatMap(page=>page.words??[]));invalidate();renderEntries();
-  });
   el("photo-target").addEventListener("change",()=>{
     el("photo-new-unit").hidden=Boolean(el("photo-target").value);
-    decisions=Object.create(null);
-    el("photo-duplicates").replaceChildren();invalidate();updateCounts();
+    el("photo-duplicate-policy").value="keep";
+    refreshPreview();updateCounts();
   });
-  for (const id of ["photo-unit","photo-material"]) el(id).addEventListener("input",invalidate);
-  el("photo-preview-import").addEventListener("click",prepare);
+  el("photo-unit").addEventListener("input",refreshPreview);
+  el("photo-duplicate-policy").addEventListener("change",refreshPreview);
   el("photo-commit").addEventListener("click",()=>{
     if (!preview||working) return;
+    if(el("photo-duplicate-policy").value==="replace"&&Object.keys(decisions).length&&
+        !window.confirm("更新所有重複詞條？既有人工修正的詞義將被新版詞義取代。")) return;
     try {
       const saved=commit(preview);
       const oldBank=JSON.parse(preview.expected), summary=preview.summary;
@@ -503,7 +513,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       previous:page.previous,uiErrors:page.uiErrors};
   }
   function report(){
-    return {appVersion:"0.8.3",schemaVersion:1,createdAt:new Date().toISOString(),
+    return {appVersion:"0.8.4",schemaVersion:1,createdAt:new Date().toISOString(),
       model:"PaddleOCR.js 0.4.2 · PP-OCRv5 Mobile · WASM 1 thread",
       pages:[...removed,...queue.pages.map(pageReport)],events,imports};
   }
@@ -514,7 +524,8 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     if(queue.pages.length||events.length) lastReport=structuredClone(report());
     queue.pages.length=0;events=[];imports=[];removed=[];decisions=Object.create(null);
     clearPage();
-    el("photo-duplicates").replaceChildren();invalidate();renderProgress();
+    el("photo-duplicates").hidden=true;el("photo-duplicate-policy").value="keep";
+    el("photo-duplicate-rows").replaceChildren();invalidate();renderProgress();
   }
   el("photo-new-batch").addEventListener("click",()=>{
     if(working) return;
@@ -558,7 +569,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     reset(){
       statusCheck?.abort();
       resetBatch();
-      for(const id of ["photo-unit","photo-material","photo-page-label"]) el(id).value="";
+      for(const id of ["photo-unit","photo-page-label"]) el(id).value="";
     },
   };
 }

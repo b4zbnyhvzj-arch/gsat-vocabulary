@@ -1,7 +1,8 @@
+import {isBaseOnlyVerb} from "./verb-lexicon.js";
 import { validateBank, prepareAddedWords, mergeSenses, recordHasSense } from "./bank.js";
 import {errorDetails} from "./ocr-task.js";
-import { candidateBank } from "./ocr-app-v083/entry-candidate.js";
-import { candidateReviewPlan } from "./ocr-app-v083/entry-review.js";
+import { candidateBank } from "./ocr-app-v084/entry-candidate.js";
+import { candidateReviewPlan } from "./ocr-app-v084/entry-review.js";
 
 const wordKey=value=>value.trim().normalize("NFC").toLowerCase();
 const union=(a,b)=>[...new Set([...a,...b])];
@@ -184,7 +185,7 @@ export function preparePhotoImport(current, target, pages, decisions={}) {
         if (available) finalSettings.supplementalVerbForms={...available,base:merged.english};
       }
     } else delete merged.verbForms;
-    if(merged.verbForms||finalSettings.supplementalVerbForms||!verbParts.has(chosen.partOfSpeech)) {
+    if((row.automaticImport&&isBaseOnlyVerb(merged.english))||merged.verbForms||finalSettings.supplementalVerbForms||!verbParts.has(chosen.partOfSpeech)) {
       delete merged.pendingVerbForms;
     } else if(word.pendingVerbForms) merged.pendingVerbForms=true;
     Object.defineProperty(settings,existing.id,{value:finalSettings,enumerable:true,writable:true,configurable:true});

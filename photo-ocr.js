@@ -1,9 +1,11 @@
-import {selectHeadwords} from "./ocr-app-v083/selection.js";
-import {recoverMissing} from "./ocr-app-v083/local-recovery.js";
-import {keepPrimarySelection} from "./ocr-app-v083/page-records.js";
+import {selectHeadwords} from "./ocr-app-v084/selection.js";
+import {recoverMissing,recoveryRegions} from "./ocr-app-v084/local-recovery.js";
+import {keepPrimarySelection} from "./ocr-app-v084/page-records.js";
 import {OCR_RUNTIME} from "./ocr-assets.js";
 import {createEngineSession} from "./photo-engine-session.js";
 import {redRecoveryRegions} from "./photo-red-recovery.js";
+import {glossRecoveryRegions} from "./photo-gloss-recovery.js";
+import {parseEntries} from "./ocr-app-v084/entry-parser.js";
 import {abortError,deadline,errorDetails} from "./ocr-task.js";
 
 const engineUrl=new URL("engine-v082.js",OCR_RUNTIME);
@@ -66,16 +68,22 @@ export function createPhotoEngine(options,log=()=>{}) {
       if(!retry||!["black","red"].includes(primary.mode)) return {ocr,selection:primary,recovery:null,timings,longSide};
       stage="局部二次辨識";
       progress(stage);
-      const cropped=primary.mode==="red"?
-        redRecoveryRegions(context.getImageData(0,0,canvas.width,canvas.height),ocr.original,primary):undefined;
+      const selected=primary.entries.filter(entry=>entry.status==="selected"&&entry.word);
+      const draft=parseEntries({ocr,selection:primary,final:{words:selected.map(entry=>({id:entry.id,word:entry.word,source:"ocr"}))}},
+        {strict:true,automaticImport:true});
+      const headings=primary.mode==="red"?
+        redRecoveryRegions(context.getImageData(0,0,canvas.width,canvas.height),ocr.original,primary):
+        recoveryRegions(primary,ocr.original);
+      const glosses=glossRecoveryRegions(draft,ocr.original);
+      const cropped=[...glosses.filter(crop=>crop.score>1),...headings,...glosses.filter(crop=>crop.score===1)].slice(0,2);
       const {output,recovery}=await keepPrimarySelection(primary,
         ()=>recoverMissing(ocr,photo,primary,region=>session.predict(region,signal),{
           stop:()=>session.release("局部辨識停止",false),regions:cropped,signal,
           decode:image=>deadline("局部圖片解碼",3500,signal,()=>image.decode()),
         }),
         items=>{
-          const second=analyze({...ocr,items},canvas,mode);
-          if(primary.mode==="red") {
+          const second=analyze({...ocr,items:items.filter(item=>item.ocrSource!=="gloss-retry")},canvas,mode);
+          {
             const selected=new Map(primary.entries.filter(entry=>entry.status==="selected").map(entry=>[entry.id,entry]));
             second.entries=second.entries.map(entry=>selected.get(entry.id)??entry);
           }

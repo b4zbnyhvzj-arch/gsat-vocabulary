@@ -1,3 +1,4 @@
+import {isBaseOnlyVerb} from "./verb-lexicon.js";
 import { createQuiz } from "./quiz.js";
 import { createStudyStorage, STORAGE_KEY } from "./storage.js";
 import {
@@ -834,9 +835,9 @@ function buildWordDraft(isEditing) {
   const quizSettings = {};
   const hasSense = Boolean(partOfSpeech && meaning);
   const missingSense = (parts.length > 1 || partOfSpeech || meaning) && !hasSense;
-  const pending=Boolean(wordsById.get(editor?.id)?.pendingVerbForms)&&!hasForms&&verbParts.has(partOfSpeech||parts[0]);
+  const pending=Boolean(wordsById.get(editor?.id)?.pendingVerbForms)&&!isBaseOnlyVerb(word.english)&&!hasForms&&verbParts.has(partOfSpeech||parts[0]);
   if(isEditing&&wordsById.get(editor?.id)?.pendingVerbForms) word.pendingVerbForms=pending?true:null;
-  const needsForms = !pending&&(hasForms || verbParts.has(partOfSpeech || parts[0]));
+  const needsForms = hasForms || (!pending && !isBaseOnlyVerb(word.english) && verbParts.has(partOfSpeech || parts[0]));
   if (missingSense || (needsForms && !Object.values(forms).every(Boolean))) {
     wordAdvanced.open = true;
     throw new Error(missingSense ? "請完整選擇出題詞性與對應的中文意思。" :
@@ -1001,7 +1002,7 @@ function backupLearning() {
     const bank=createBankStorage().read()??activeBank;
     if(!bank) return;
     const history={mistakes:study.getMistakes(),quizResults:study.getQuizResults()};
-    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.3",createdAt:new Date().toISOString(),
+    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.4",createdAt:new Date().toISOString(),
       localStorage:{[BANK_STORAGE_KEY]:bank,[STORAGE_KEY]:history}},"GSAT-Vocabulary-backup.json");
   } catch(error) {showBankStatus("備份失敗。"+error.message,true);}
 }
