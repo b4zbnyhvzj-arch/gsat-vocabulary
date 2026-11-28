@@ -1,10 +1,13 @@
+import {deadline,errorDetails} from "./ocr-task.js";
+import {traditionalConverter} from "./photo-traditional.js";
+import {quizReadyWords} from "./bank.js";
 import {createQuiz} from "./quiz.js";
 import {createPhotoQueue, groupPhotoWords, duplicatePhotoWords, preparePhotoImport} from "./photo-batch.js";
 import {createPhotoEngine} from "./photo-ocr.js";
 import {photoResources} from "./ocr-assets.js";
-import {parseEntries, PARTS, isVerb} from "./ocr-lab/entry-parser.js";
-import {createReview, selectionExport} from "./ocr-lab/selection-review.js";
-import {entryIssues, orderedEntries, setEntryConfirmed, confirmCleanEntries, reviewSummary} from "./ocr-lab/entry-review.js";
+import {parseEntries, PARTS, isVerb, fragmentKind} from "./ocr-app-v083/entry-parser.js";
+import {createReview, selectionExport} from "./ocr-app-v083/selection-review.js";
+import {entryIssues, orderedEntries, setEntryConfirmed, confirmCleanEntries, reviewSummary} from "./ocr-app-v083/entry-review.js";
 
 const el=id=>document.getElementById(id);
 const node=(tag,text)=>{
@@ -38,8 +41,11 @@ function select(value,options,edit) {
 }
 
 export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
-  const engine=createPhotoEngine(()=>({mode:el("photo-mode").value,retry:el("photo-local-retry").checked}));
-  const queue=createPhotoQueue(engine.recognize);
+  let events=[], removed=[], imports=[], lastReport=null, verified=false, converter;
+  const log=(type,data={})=>events.push({type,at:new Date().toISOString(),...data});
+  const engine=createPhotoEngine(()=>({mode:el("photo-mode").value,retry:el("photo-local-retry").checked,
+    longSide:Number(el("photo-resolution").value)}),log);
+  const queue=createPhotoQueue(engine.recognize,preparePage);
   let current=null, imageUrl=null, working=false, cancelDownload=null, statusCheck=null, preview=null;
   let decisions=Object.create(null);
   const pageList=el("photo-pages"), entries=el("photo-entries");
@@ -64,7 +70,8 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     el("photo-run").disabled=working||!queue.pages.some(page=>page.state==="queued");
     el("photo-retry").disabled=working||!queue.pages.some(page=>["failed","cancelled"].includes(page.state));
     el("photo-stop").disabled=!working;
-    for (const id of ["photo-album","photo-camera","photo-mode","photo-local-retry","photo-download","photo-preview-import"]) {
+    el("photo-new-batch").disabled=working;
+    for (const id of ["photo-album","photo-camera","photo-mode","photo-local-retry","photo-resolution","photo-download","photo-preview-import"]) {
       el(id).disabled=working;
     }
     pageList.replaceChildren(...queue.pages.map(page=>{
@@ -72,7 +79,24 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       const labels={queued:"等待",running:"辨識中",done:"已完成",failed:"失敗",cancelled:"已停止"};
       row.append(node("p","第 "+page.id+" 頁 · "+page.file.name+" · "+labels[page.state]));
       if (page.error) row.append(node("p",page.error));
-      if (page.state==="done") row.append(button("核對第 "+page.id+" 頁",()=>openPage(page)));
+      if (page.result) row.append(button("核對第 "+page.id+" 頁",()=>openPage(page)));
+      if (page.result&&["failed","cancelled"].includes(page.state)) row.append(button("使用上次可用結果",()=>{
+        if(working) return;
+        page.state="done";page.error="";
+        log("previous-result-restored",{page:page.id});invalidate();renderProgress();openPage(page);
+      }));
+      if (page.attempts.length) {
+        const retry=button("重新辨識第 "+page.id+" 頁",()=>void run({scan:true,pageId:page.id}));
+        retry.disabled=working;row.append(retry);
+      }
+      const remove=button("移除第 "+page.id+" 頁",()=>{
+        if (page.result&&!window.confirm("移除這張照片和本頁的確認內容？")) return;
+        removed.push({...pageReport(page),removed:true});
+        queue.remove(page.id);
+        if(current===page) clearPage();
+        invalidate();renderProgress();updateCounts();
+      });
+      remove.disabled=working;row.append(remove);
       return row;
     }));
   }
@@ -85,40 +109,82 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     bytes(result.received,result.total);
     if (download&&!result.ready) throw new Error("OCR 資源尚未驗證完成，請重試。");
   }
-  async function run({scan,retry=false}) {
+  async function run({scan,retry=false,pageId}) {
     if (working) return;
     statusCheck?.abort();
     working=true;invalidate();renderProgress();
     cancelDownload=new AbortController();
     try {
-      await cacheModels(true,cancelDownload.signal);
-      if (!scan||cancelDownload.signal.aborted) return;
+      const signal=cancelDownload.signal;
+      if(!verified||!scan) {
+        verified=false;
+        const assetTask=new AbortController();
+        const abort=()=>assetTask.abort();
+        signal.addEventListener("abort",abort,{once:true});
+        const began=performance.now();
+        try {
+          await deadline("離線模型下載／驗證",180000,signal,()=>cacheModels(true,assetTask.signal));
+          verified=true;log("assets-verified",{elapsedMs:performance.now()-began});
+        } finally {signal.removeEventListener("abort",abort);assetTask.abort();}
+      }
+      if (!scan||signal.aborted) return;
       status("正在循序辨識照片…");
-      await queue.run({retry,onChange:page=>{
-        if (page?.state==="done"&&!page.review) {
-          page.review=createReview();
-          page.review.sync(page.result.selection.entries);
-          page.words=[];
-          rebuild(page);
-        }
-        renderProgress();
-      }});
+      await queue.run({retry,pageId,onChange:renderProgress});
+      if(queue.pages.some(page=>page.state==="failed"&&/模型／WASM/.test(page.error))) verified=false;
       status(queue.pages.some(page=>page.state==="failed")?
         "有照片辨識失敗。已完成的頁面仍可核對。":"已停止或完成本次辨識，可繼續核對。");
+      if(current?.result&&pageId!==undefined) openPage(current);
       if (!current) {
         const first=queue.pages.find(page=>page.state==="done");
         if (first) openPage(first);
       }
     } catch(error) {
+      log("batch-error",{error:errorDetails(error)});
       status(cancelDownload.signal.aborted?"已停止。":error.message,!cancelDownload.signal.aborted);
     } finally {
-      await engine.release().catch(()=>{});
-      working=false;cancelDownload=null;renderProgress();
+      try {await engine.release();}
+      catch(error) {log("release-error",{error:errorDetails(error)});}
+      finally {working=false;cancelDownload=null;renderProgress();updateCounts();}
     }
+  }
+  const key=value=>String(value??"").trim().normalize("NFKC").toLowerCase();
+  async function preparePage(page,result,signal) {
+    const review=createReview();
+    review.sync(result.selection.entries);
+    const old=page.words??[];
+    const edits=new Map((page.review?.changes()??[]).map(edit=>[key(edit.originalWord),edit]));
+    for(const entry of result.selection.entries) {
+      const edit=edits.get(key(entry.word));
+      if(edit) {
+        try {review.edit(entry.id,{checked:edit.checked,word:edit.correctedWord});edits.delete(key(entry.word));}
+        catch(error) {log("preserve-head",{page:page.id,error:errorDetails(error)});}
+      }
+    }
+    for(const word of old.filter(word=>word.edited||word.confirmed||String(word.id).startsWith("manual-"))) {
+      if(!review.final().some(item=>key(item.word)===key(word.originalEnglish))) review.add(word.originalEnglish);
+    }
+    const selection=selectionExport(result.ocr,result.selection,review);
+    const worker=new Worker(new URL("./photo-parser-worker.js",import.meta.url),{type:"module"});
+    try {
+      const parsed=await deadline("解析詞條",15000,signal,()=>new Promise((resolve,reject)=>{
+        worker.onmessage=({data})=>data.error?
+          reject(new Error(data.error.message,{cause:data.error})):resolve(data.parsed);
+        worker.onerror=e=>reject(new Error(e.message||"詞條解析 Worker 失敗。"));
+        worker.onmessageerror=()=>reject(new Error("詞條解析結果無法讀取。"));
+        worker.postMessage({...selection,recovery:result.recovery});
+      }));
+      const bySpelling=new Map(old.map(word=>[key(word.originalEnglish),word]));
+      return {review,automatic:parsed,previous:page.words?{words:structuredClone(old),automatic:page.automatic}:null,
+        words:parsed.words.map(word=>{
+          const prior=bySpelling.get(key(word.originalEnglish));
+          return prior?.edited||prior?.confirmed||String(prior?.id).startsWith("manual-")?
+            {...prior,id:word.id,strictGloss:true}:word;
+        })};
+    } finally {worker.terminate();}
   }
   function rebuild(page) {
     const selection=selectionExport(page.result.ocr,page.result.selection,page.review);
-    const parsed=parseEntries({...selection,recovery:page.result.recovery});
+    const parsed=parseEntries({...selection,recovery:page.result.recovery},{strict:true,standardize:converter});
     const old=new Map(page.words.map(word=>[word.id,word]));
     page.words=parsed.words.map(word=>{
       const prior=old.get(word.id);
@@ -140,6 +206,11 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     el("photo-page-mode").textContent=page.result.selection.modeUncertain?
       "版式判斷不確定，可選擇教材模式後重新加入照片。":"教材模式："+(page.result.selection.mode==="red"?"紅色大字":"黑色粗體");
     el("photo-page-label").value=page.page;
+    el("photo-expected").value=page.expected??"";
+    el("photo-old-result").hidden=!page.previous;
+    el("photo-old-result").open=false;
+    el("photo-old-words").replaceChildren(...(page.previous?.words??[]).map(word=>node("li",
+      word.english+" · "+word.senses.map(sense=>sense.meaning).join("／"))));
     el("photo-manual-word").value="";
     el("photo-view").open=false;
     renderHeads();renderEntries();
@@ -194,7 +265,23 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     }
     headList.replaceChildren(...checks);
   }
+  function countsFor(page){
+    const entries=page.result?.selection.entries??[];
+    const automatic=new Set(entries.filter(entry=>entry.status==="selected"&&entry.word).map(entry=>key(entry.word))).size;
+    const review=new Set(entries.filter(entry=>entry.status==="review"&&entry.word&&
+      !page.review?.get(entry.id).checked).map(entry=>key(entry.word))).size;
+    const {pending,confirmed}=reviewSummary(page.words??[]);
+    return {automatic,unselectedReview:review,pending:pending+review,confirmed};
+  }
+  function updatePageComparison(){
+    if(!current?.result) return;
+    const count=countsFor(current),expected=Number(current.expected)||0;
+    el("photo-page-comparison").textContent="已辨識 "+count.automatic+" · 待人工修正 "+count.pending+
+      " · 可匯入 "+count.confirmed+(expected?" · 預期 "+expected+(count.automatic!==expected?"（數量不符，請補查）":""):"")+
+      (current.previous?" · 上次選取 "+current.previous.words.length+" 筆，人工修正已保留。":"");
+  }
   function updateCounts(){
+    updatePageComparison();
     const pages=queue.pages.filter(page=>page.words);
     const words=pages.flatMap(page=>page.words);
     const {confirmed,pending,flagged}=reviewSummary(words);
@@ -231,8 +318,8 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       warnings.hidden=!issues.length;
       updateCounts();
     };
-    const edit=()=>{setEntryConfirmed(word,false);invalidate();refresh();};
-    checked.addEventListener("change",()=>{setEntryConfirmed(word,checked.checked);invalidate();refresh();});
+    const edit=()=>{word.edited=true;setEntryConfirmed(word,false);invalidate();refresh();};
+    checked.addEventListener("change",()=>{word.edited=true;setEntryConfirmed(word,checked.checked);invalidate();refresh();});
     card.append(title,warnings,field("英文",text(word.english,value=>{word.english=value;edit();})));
     for (const [index,sense] of word.senses.entries()) {
       const group=node("fieldset");
@@ -242,7 +329,18 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
           forms.hidden=!word.senses.some(item=>isVerb(item.part));
           edit();
         })),
-        field("中文詞義",text(sense.meaning,value=>{sense.meaning=value;edit();},true)));
+        field("中文詞義",text(sense.meaning,value=>{
+          sense.meaning=converter?converter(value):value;
+          sense.shortGlossVerified=false;single.checked=false;
+          singleLabel.hidden=fragmentKind(sense.meaning)!=="short";edit();
+        },true)));
+      const single=node("input");
+      single.type="checkbox";single.checked=sense.shortGlossVerified===true;
+      single.addEventListener("change",()=>{sense.shortGlossVerified=single.checked;edit();});
+      const singleLabel=field("已對照原圖，此單一漢字即完整詞義",single);
+      singleLabel.className="photo-check";
+      singleLabel.hidden=fragmentKind(sense.meaning)!=="short";
+      group.append(singleLabel);
       const primary=node("input");
       primary.type="radio";primary.name="photo-primary-"+word.id;primary.checked=word.primary===index;
       primary.addEventListener("change",()=>{word.primary=index;edit();});
@@ -270,9 +368,22 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     for (const [key,label] of [["base","原形"],["past","過去式"],["pastParticiple","過去分詞"]]) {
       forms.append(field(label,text(word.verbForms?.[key]??(key==="base"?word.english:""),value=>{
         word.verbForms??={base:word.english,past:"",pastParticiple:"",origin:"reviewed"};
-        word.verbForms[key]=value;word.verbForms.origin="reviewed";edit();
+        word.verbForms[key]=value;word.verbForms.origin="reviewed";word.deferVerbForms=false;defer.checked=false;edit();
       })));
     }
+    const defer=node("input");
+    defer.type="checkbox";defer.checked=word.deferVerbForms===true;
+    defer.addEventListener("change",()=>{
+      if(defer.checked&&Object.values(word.verbForms??{}).some(value=>typeof value==="string"&&value.trim())) {
+        if(!window.confirm("要改成三態待補？未完成的三態不會寫入題庫。")) {defer.checked=false;return;}
+        word.verbForms=null;
+      }
+      word.deferVerbForms=defer.checked;
+      edit();renderEntries();
+    });
+    const deferLabel=field("保留已核對詞義，三態待補時暫不出題",defer);
+    deferLabel.className="photo-check";
+    forms.append(deferLabel);
     for (const ref of word.sources) {
       const source=node("details");
       source.append(node("summary","原始 OCR"),node("p",ref.text),button("看原圖",()=>showSource(ref)));
@@ -285,7 +396,7 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     entries.replaceChildren(...orderedEntries(current?.words??[]).map(wordCard));
     updateCounts();
   }
-  const payload=()=>queue.pages.filter(page=>page.words).map(page=>({words:page.words,
+  const payload=()=>queue.pages.filter(page=>page.words&&page.state==="done").map(page=>({words:page.words,
     material:el("photo-material").value.trim(),page:page.page.trim(),image:"第 "+page.id+" 張 · "+page.file.name,
     original:page.result.ocr.original}));
   const target=()=>({id:el("photo-target").value,name:el("photo-unit").value,material:el("photo-material").value});
@@ -309,20 +420,30 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       preview=preparePhotoImport(bank,target(),data,decisions);
       const {added,updated,skipped,pending}=preview.summary;
       const incomplete=queue.pages.filter(page=>page.state!=="done").length;
+      const totals=queue.pages.reduce((sum,page)=>{
+        const counts=countsFor(page);
+        const expected=Number(page.expected)||0;
+        return {expected:sum.expected+expected,automatic:sum.automatic+counts.automatic,
+          review:sum.review+counts.unselectedReview,gaps:sum.gaps+Number(expected>0&&
+            (expected!==counts.automatic||expected!==counts.confirmed))};
+      },{expected:0,automatic:0,review:0,gaps:0});
       el("photo-import-count").textContent="新增 "+added+" · 更新 "+updated+" · 略過重複 "+skipped+
-        " · 待確認 "+pending+" · 未完成照片 "+incomplete;
+        " · 待確認 "+pending+" · 未完成照片 "+incomplete+" · 已辨識 "+totals.automatic+
+        " · 實際將匯入 "+(added+updated)+
+        (preview.bank.words.some(word=>word.unitId===preview.unitId&&word.pendingVerbForms)?" · 本單元有三態待補詞條":"")+(totals.expected?" · 已填預期合計 "+totals.expected:"")+
+        (totals.gaps?" · "+totals.gaps+" 頁需補查":"")+(totals.review?" · 未勾選候選 "+totals.review:"");
       if (added+updated===0) {
         status("沒有將寫入的詞條。可調整重複單字處理方式。");
         return;
       }
       try {
-        createQuiz(preview.bank.words,preview.unitId,{quizSettings:preview.bank.quizSettings,random:()=>0.5});
+        createQuiz(quizReadyWords(preview.bank.words),preview.unitId,{quizSettings:preview.bank.quizSettings,random:()=>0.5});
         el("photo-quiz-note").textContent="匯入後可開始基礎測驗。";
       } catch(error) {
         el("photo-quiz-note").textContent="詞條仍可匯入。測驗暫不可用："+error.message;
       }
       el("photo-commit").hidden=false;
-      el("photo-commit").textContent=pending||incomplete?"略過未完成項目並確認匯入":"確認匯入題庫";
+      el("photo-commit").textContent=pending||incomplete||totals.review||totals.gaps?"確認先匯入已核對項目":"確認匯入題庫";
       status("");
     } catch(error) {status(error.message,true);}
   }
@@ -334,6 +455,9 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
   el("photo-retry").addEventListener("click",()=>void run({scan:true,retry:true}));
   el("photo-download").addEventListener("click",()=>void run({scan:false}));
   el("photo-stop").addEventListener("click",()=>{cancelDownload?.abort();queue.cancel();status("正在停止…");});
+  el("photo-expected").addEventListener("input",event=>{
+    current.expected=event.target.value;invalidate();updatePageComparison();
+  });
   el("photo-page-label").addEventListener("input",event=>{current.page=event.target.value;invalidate();});
   el("photo-add-word").addEventListener("click",()=>{
     try {
@@ -356,8 +480,58 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
     if (!preview||working) return;
     try {
       const saved=commit(preview);
-      done(saved,preview.unitId,preview.summary);
+      const oldBank=JSON.parse(preview.expected), summary=preview.summary;
+      imports.push({at:new Date().toISOString(),unitId:preview.unitId,summary,choices:{...decisions},
+        pages:payload().map(page=>({page:page.page,image:page.image,words:page.words.filter(word=>word.confirmed).map(word=>word.english)})),
+        written:saved.words.filter(word=>word.unitId===preview.unitId&&
+          JSON.stringify(word)!==JSON.stringify(oldBank.words.find(prior=>prior.id===word.id)))
+          .map(word=>({id:word.id,english:word.english})),
+      });
+      done(saved,preview.unitId,summary);
+      const pending=queue.pages.reduce((sum,page)=>sum+countsFor(page).pending,0);
+      const failedPages=queue.pages.filter(page=>page.state!=="done").length;
+      status("此輪已寫入 "+(summary.added+summary.updated)+" 筆 · 待確認 "+pending+
+        " 筆 · 未完成 "+failedPages+" 頁。可繼續核對或開始下一批。");
+      invalidate();
     } catch(error) {status(error.message,true);invalidate();}
+  });
+  function pageReport(page){
+    const words=(page.words??[]).map(word=>({...word,issues:entryIssues(word)}));
+    return {id:page.id,file:page.file.name,type:page.file.type,bytes:page.file.size,page:page.page,
+      state:page.state,expected:page.expected??null,counts:countsFor(page),error:page.error??null,
+      attempts:page.attempts,automatic:page.automatic,manual:page.review?.changes(),words,
+      previous:page.previous,uiErrors:page.uiErrors};
+  }
+  function report(){
+    return {appVersion:"0.8.3",schemaVersion:1,createdAt:new Date().toISOString(),
+      model:"PaddleOCR.js 0.4.2 · PP-OCRv5 Mobile · WASM 1 thread",
+      pages:[...removed,...queue.pages.map(pageReport)],events,imports};
+  }
+  function clearPage(){
+    current=null;removePreviewImage();el("photo-page-review").hidden=true;renderEntries();
+  }
+  function resetBatch(){
+    if(queue.pages.length||events.length) lastReport=structuredClone(report());
+    queue.pages.length=0;events=[];imports=[];removed=[];decisions=Object.create(null);
+    clearPage();
+    el("photo-duplicates").replaceChildren();invalidate();renderProgress();
+  }
+  el("photo-new-batch").addEventListener("click",()=>{
+    if(working) return;
+    if(queue.pages.length&&!window.confirm("開始新一批？目前結果保留在上一批診斷報告。")) return;
+    resetBatch();status("請加入下一批照片。");
+  });
+  el("photo-diagnostics").addEventListener("click",()=>{
+    const detail=queue.pages.length||events.length?report():lastReport??report();
+    const link=node("a"),url=URL.createObjectURL(new Blob([JSON.stringify(detail,null,2)],{type:"application/json"}));
+    link.href=url;link.download="GSAT-OCR-diagnostics.json";document.body.append(link);link.click();link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),30000);
+  });
+  document.addEventListener("visibilitychange",()=>{
+    if(document.hidden&&working){log("background-cancel");cancelDownload?.abort();queue.cancel();}
+  });
+  window.addEventListener("pagehide",()=>{
+    cancelDownload?.abort();queue.cancel();statusCheck?.abort();
   });
   el("photo-back").addEventListener("click",()=>{
     if (working) {status("請先停止辨識，再返回單元。");return;}
@@ -373,19 +547,18 @@ export function mountPhotoImport({readBank,readLatest,commit,done,close}) {
       // Opening the entry point checks metadata only; the engine and models remain unloaded.
       const controller=new AbortController();
       statusCheck=controller;
-      void cacheModels(false,controller.signal).catch(error=>{
+      void traditionalConverter().then(value=>{converter=value;}).catch(error=>log("dictionary-error",{error:errorDetails(error)}));
+      void photoResources({signal:controller.signal,presenceOnly:true}).then(result=>{
+        if(!controller.signal.aborted) el("photo-model-status").textContent=result.ready?
+          "模型已快取，首次辨識時核對。":"尚有離線模型待下載。";
+      }).catch(error=>{
         if(!controller.signal.aborted) el("photo-model-status").textContent=error.message;
       });
     },
     reset(){
       statusCheck?.abort();
-      queue.pages.length=0;
-      current=null;decisions=Object.create(null);
-      removePreviewImage();
-      el("photo-page-review").hidden=true;
-      for (const id of ["photo-unit","photo-material","photo-page-label"]) el(id).value="";
-      el("photo-duplicates").replaceChildren();
-      invalidate();renderEntries();renderProgress();
+      resetBatch();
+      for(const id of ["photo-unit","photo-material","photo-page-label"]) el(id).value="";
     },
   };
 }

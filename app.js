@@ -1,7 +1,7 @@
 import { createQuiz } from "./quiz.js";
 import { createStudyStorage, STORAGE_KEY } from "./storage.js";
 import {
-  BANK_SCHEMA_VERSION, BANK_STORAGE_KEY, DuplicateWordError, createBankStorage, mergeBanks, parseBank, validateBank,
+  BANK_SCHEMA_VERSION, BANK_STORAGE_KEY, DuplicateWordError, createBankStorage, mergeBanks, parseBank, validateBank, quizReadyWords,
 } from "./bank.js";
 
 const home = document.querySelector("#home");
@@ -73,6 +73,10 @@ function formatWordCount(count) {
   return `${numberFormat.format(count)} 個單字`;
 }
 
+function unitWordCounts(total, ready) {
+  return `收錄 ${formatWordCount(total)} · 可出題 ${formatWordCount(ready)}`;
+}
+
 function selectedUnitWords() {
   return activeBank.words.filter(word => word.unitId === selectedUnitId);
 }
@@ -95,7 +99,8 @@ function showScreen(screen) {
 function showUnitDetail() {
   const message = unitQuizErrors.get(selectedUnitId) ?? "";
   detailTitle.textContent = unitNames.get(selectedUnitId);
-  detailCount.textContent = `收錄 ${formatWordCount(selectedUnitWords().length)}`;
+  const words = selectedUnitWords();
+  detailCount.textContent = unitWordCounts(words.length, message ? 0 : quizReadyWords(words).length);
   startQuizButton.disabled = Boolean(message);
   quizError.hidden = !message;
   quizError.textContent = message;
@@ -148,7 +153,7 @@ function launchQuiz(unitId, wordIds) {
 
   let questions;
   try {
-    questions = createQuiz(activeBank.words, unitId, { wordIds, quizSettings: activeBank.quizSettings });
+    questions = createQuiz(quizReadyWords(activeBank.words), unitId, { wordIds, quizSettings: activeBank.quizSettings });
   } catch (error) {
     if (!isReview) showUnitDetail();
     const target = isReview ? reviewQuizError : quizError;
@@ -165,6 +170,8 @@ function launchQuiz(unitId, wordIds) {
   window.addEventListener("beforeunload", warnOnUnload);
   document.querySelector("#quiz-title").textContent = unitNames.get(unitId);
   document.querySelector("#quiz-mode").hidden = !isReview;
+  const unitWords = activeBank.words.filter(word => word.unitId === unitId);
+  document.querySelector("#quiz-coverage").textContent = unitWordCounts(unitWords.length, quizReadyWords(unitWords).length);
   progressBar.max = questions.length;
   showScreen(quizScreen);
   showQuestion();
@@ -376,13 +383,15 @@ function createReviewRow(record) {
 
 function updateReviewPractice(records) {
   const pending = records.filter(record => !record.familiar);
-  const valid = pending.filter(record => wordsById.get(record.wordId)?.unitId === record.unitId);
+  const existing=pending.filter(record=>wordsById.get(record.wordId)?.unitId===record.unitId);
+  const valid=existing.filter(record=>!wordsById.get(record.wordId)?.pendingVerbForms);
   const unitIds = new Set(pending.map(record => record.unitId));
 
   let note = "";
   if (unitIds.size > 1) note = "待複習單字分屬多個單元，請先選擇特定單元。";
-  else if (valid.length !== pending.length) note = "部分待複習紀錄找不到題庫單字，無法開始本輪測驗。";
+  else if (existing.length !== pending.length) note = "部分待複習紀錄找不到題庫單字，無法開始本輪測驗。";
 
+  if(!note&&existing.length&&!valid.length) note="待複習詞條的三態待補，目前無可出題詞條。";
   reviewStart.disabled = valid.length === 0 || Boolean(note);
   reviewQuizCount.textContent = `可測驗的待複習單字 ${numberFormat.format(valid.length)} 個`;
   reviewQuizNote.hidden = !note;
@@ -390,7 +399,7 @@ function updateReviewPractice(records) {
   reviewQuizError.hidden = true;
   reviewQuizError.textContent = "";
   if (reviewStart.disabled) return null;
-  return { unitId: pending[0].unitId, wordIds: pending.map(record => record.wordId) };
+  return { unitId: valid[0].unitId, wordIds: valid.map(record => record.wordId) };
 }
 
 function renderReview() {
@@ -434,7 +443,7 @@ function startReviewQuiz() {
   if (practice) launchQuiz(practice.unitId, practice.wordIds);
 }
 
-function createUnitRow(unit, count) {
+function createUnitRow(unit, count, ready) {
   const item = document.createElement("li");
   const row = document.createElement("button");
   row.className = "unit-row";
@@ -454,7 +463,7 @@ function createUnitRow(unit, count) {
   const meta = document.createElement("span");
   meta.className = "unit-meta";
   const total = document.createElement("span");
-  total.textContent = formatWordCount(count);
+  total.textContent = unitWordCounts(count, ready);
   meta.append(total);
   if (count === 0) {
     const status = document.createElement("span");
@@ -469,12 +478,14 @@ function createUnitRow(unit, count) {
 
 function renderHome(units, words) {
   const counts = new Map();
+  const readyCounts = new Map();
   for (const unit of units) {
     if (typeof unit?.id !== "string" || !unit.id ||
         typeof unit.name !== "string" || !unit.name || counts.has(unit.id)) {
       throw new Error("單元資料格式有誤。");
     }
     counts.set(unit.id, 0);
+    readyCounts.set(unit.id, 0);
   }
   for (const word of words) {
     if (!counts.has(word?.unitId)) {
@@ -483,6 +494,9 @@ function renderHome(units, words) {
     counts.set(word.unitId, counts.get(word.unitId) + 1);
   }
 
+  for (const word of quizReadyWords(words)) {
+    if (!unitQuizErrors.has(word.unitId)) readyCounts.set(word.unitId, readyCounts.get(word.unitId) + 1);
+  }
   const groups = new Map();
   for (const unit of units) {
     const level = Number.isInteger(unit.level) ? `Level ${unit.level}` : "";
@@ -503,7 +517,7 @@ function renderHome(units, words) {
     list.setAttribute("role", "list");
 
     for (const unit of groupUnits) {
-      list.append(createUnitRow(unit, counts.get(unit.id)));
+      list.append(createUnitRow(unit, counts.get(unit.id), readyCounts.get(unit.id)));
     }
     group.append(heading, list);
     groupContainer.append(group);
@@ -511,6 +525,7 @@ function renderHome(units, words) {
 
   const practiceCount = units.length - unitQuizErrors.size;
   document.querySelector("#word-total").textContent = numberFormat.format(words.length);
+  document.querySelector("#quiz-word-total").textContent = numberFormat.format([...readyCounts.values()].reduce((sum, count) => sum + count, 0));
   document.querySelector("#unit-total").textContent = numberFormat.format(practiceCount);
   document.querySelector("#empty-bank").hidden = units.length > 0;
 }
@@ -545,7 +560,7 @@ function applyBank(bank) {
   unitQuizErrors.clear();
   for (const unit of bank.units) {
     try {
-      createQuiz(bank.words, unit.id, { quizSettings: bank.quizSettings, random: () => 0.5 });
+      createQuiz(quizReadyWords(bank.words), unit.id, { quizSettings: bank.quizSettings, random: () => 0.5 });
     } catch (error) {
       unitQuizErrors.set(unit.id, error.message);
     }
@@ -661,7 +676,7 @@ function renderManagedWords() {
     english.textContent = word.english;
     const part = document.createElement("p");
     part.className = "management-note";
-    part.textContent = word.partOfSpeech;
+    part.textContent = word.partOfSpeech+(word.pendingVerbForms?" · 三態待補":"");
     const meaning = document.createElement("p");
     meaning.textContent = word.chineseMeanings.join("、");
     description.append(english, part, meaning);
@@ -816,7 +831,9 @@ function buildWordDraft(isEditing) {
   const quizSettings = {};
   const hasSense = Boolean(partOfSpeech && meaning);
   const missingSense = (parts.length > 1 || partOfSpeech || meaning) && !hasSense;
-  const needsForms = hasForms || verbParts.has(partOfSpeech || parts[0]);
+  const pending=Boolean(wordsById.get(editor?.id)?.pendingVerbForms)&&!hasForms&&verbParts.has(partOfSpeech||parts[0]);
+  if(isEditing&&wordsById.get(editor?.id)?.pendingVerbForms) word.pendingVerbForms=pending?true:null;
+  const needsForms = !pending&&(hasForms || verbParts.has(partOfSpeech || parts[0]));
   if (missingSense || (needsForms && !Object.values(forms).every(Boolean))) {
     wordAdvanced.open = true;
     throw new Error(missingSense ? "請完整選擇出題詞性與對應的中文意思。" :
@@ -981,7 +998,7 @@ function backupLearning() {
     const bank=createBankStorage().read()??activeBank;
     if(!bank) return;
     const history={mistakes:study.getMistakes(),quizResults:study.getQuizResults()};
-    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.1",createdAt:new Date().toISOString(),
+    downloadPrivateJSON({schemaVersion:1,appVersion:"0.8.3",createdAt:new Date().toISOString(),
       localStorage:{[BANK_STORAGE_KEY]:bank,[STORAGE_KEY]:history}},"GSAT-Vocabulary-backup.json");
   } catch(error) {showBankStatus("備份失敗。"+error.message,true);}
 }
@@ -1066,12 +1083,12 @@ async function openPhotoImport() {
         showScreen(home);trigger.focus();
       },
       done(bank,id,summary){
-        photoSession.reset();
-        window.removeEventListener("beforeunload",warnOnUnload);
         applyBank(bank);readMistakes();
         showBankStatus("拍照匯入完成，新增 "+summary.added+" 筆，更新 "+summary.updated+" 筆。");
-        selectedUnitId=id;
-        showUnitDetail();
+        const target=document.querySelector("#photo-target");
+        if(!Array.from(target.options).some(option=>option.value===id)) target.add(new Option(unitNames.get(id),id));
+        target.value=id;
+        document.querySelector("#photo-new-unit").hidden=true;
       },
     });
     showScreen(photoScreen);

@@ -16,7 +16,7 @@
     <main class="shell">
       <header class="page-header">
         <h1>學測單字</h1>
-        <p class="app-version">v0.8.1</p>
+        <p class="app-version">v0.8.3</p>
       </header>
 
       <p id="load-status" class="notice" role="status">正在載入單字資料…</p>
@@ -24,10 +24,14 @@
 
       <div id="home" hidden>
         <p id="offline-status" class="offline-status" role="status" hidden></p>
-        <dl class="summary">
+        <dl class="summary home-summary">
           <div>
-            <dt>單字總數</dt>
+            <dt>收錄單字</dt>
             <dd id="word-total"></dd>
+          </div>
+          <div>
+            <dt>可出題單字</dt>
+            <dd id="quiz-word-total"></dd>
           </div>
           <div>
             <dt>可練習單元</dt>
@@ -86,6 +90,7 @@
             <option value="red">紅色大字</option>
             <option value="black">黑色粗體</option>
           </select></label>
+          <label>辨識尺寸 <select id="photo-resolution"><option value="2048">2048 px</option><option value="1600">1600 px（低記憶體）</option></select></label>
           <label class="photo-check">嘗試局部二次 OCR <input id="photo-local-retry" type="checkbox"></label>
           <div class="management-actions">
             <button id="photo-download" type="button" class="quiz-button">下載離線模型</button>
@@ -97,6 +102,10 @@
           <progress id="photo-progress" value="0" max="1" aria-label="照片處理進度"></progress>
           <p id="photo-progress-text"></p>
           <p id="photo-status" role="alert"></p>
+          <div class="management-actions">
+            <button id="photo-new-batch" type="button" class="quiz-button">開始下一批</button>
+            <button id="photo-diagnostics" type="button" class="quiz-button">匯出 OCR 診斷報告</button>
+          </div>
           <ol id="photo-pages"></ol>
         </div>
         <div class="management-card photo-panel">
@@ -106,6 +115,9 @@
           <div id="photo-page-review" hidden>
             <h3 id="photo-page-title" tabindex="-1"></h3>
             <p id="photo-page-mode"></p>
+            <label>本頁預期主單字（選填） <input id="photo-expected" type="number" min="1" max="300"></label>
+            <p id="photo-page-comparison" role="status"></p>
+            <details id="photo-old-result" hidden><summary>上次結果與人工修正</summary><ul id="photo-old-words"></ul></details>
             <label>本頁教材頁碼 <input id="photo-page-label"></label>
             <details id="photo-view">
               <summary>原圖對照</summary>
@@ -253,6 +265,7 @@
           <button id="leave-quiz" type="button" class="quiz-button">離開測驗</button>
         </div>
 
+        <p id="quiz-coverage" class="quiz-mode"></p>
         <div class="quiz-progress">
           <label id="question-count" for="quiz-progress-bar"></label>
           <progress id="quiz-progress-bar" value="0" max="1"></progress>

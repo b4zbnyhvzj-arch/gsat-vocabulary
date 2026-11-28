@@ -1,8 +1,8 @@
 const runtime = new URL("./ocr-runtime/", import.meta.url);
 export const OCR_CACHE_KEY = "gsat-photo-ocr:"+runtime.href+":paddle-0.4.2-r1";
 export const OCR_RUNTIME = runtime.href;
-const manifestURL = new URL("assets.json",runtime);
-const manifestHash = "f6e5d956cd9606f784fdedf0f97da1277ff11e4d039a59bda1b3b351a978020f";
+const manifestURL = new URL("assets-v082.json",runtime);
+const manifestHash = "50df2c584cbb78fd77068ebfc1c133dc39e6a58e59968ba91b65905e38dbdb6f";
 
 export async function verifyAsset(response,{bytes,sha256},signal,progress=()=>{}) {
   const check=()=>{if(signal?.aborted) throw new DOMException("已取消下載。","AbortError");};
@@ -80,7 +80,7 @@ async function checkedResource(cache,url,expected,{download,signal,progress}) {
   }
 }
 
-export async function photoResources({download=false,progress=()=>{},signal}={}) {
+export async function photoResources({download=false,progress=()=>{},signal,presenceOnly=false}={}) {
   if (!globalThis.caches) throw new Error("離線 OCR 需要 HTTPS 或 localhost。");
   const cache=await caches.open(OCR_CACHE_KEY);
   const expected={sha256:manifestHash};
@@ -92,7 +92,9 @@ export async function photoResources({download=false,progress=()=>{},signal}={})
   const total=assets.reduce((sum,entry)=>sum+entry.bytes,0);
   let received=0;
   for(const item of assets) {
-    const verified=await checkedResource(cache,item.url,item,{download,signal,progress:count=>progress(received+count,total)});
+    if(signal?.aborted) throw new DOMException("已取消。","AbortError");
+    const verified=presenceOnly?await cache.match(item.url):
+      await checkedResource(cache,item.url,item,{download,signal,progress:count=>progress(received+count,total)});
     if(verified) received+=item.bytes;
     progress(received,total);
   }

@@ -6,7 +6,7 @@ const partsOfSpeech = new Set([
   ...verbParts, "n.", "a.", "adj.", "adv.", "pron.", "prep.", "conj.", "interj.", "art.", "det.", "aux.", "phr.",
 ]);
 const unitFields = ["name", "textbook", "level", "unitNumber", "expectedWordCount"];
-const wordFields = ["english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms", "senses"];
+const wordFields = ["english", "chineseMeanings", "partOfSpeech", "source", "verificationStatus", "verbForms", "senses", "pendingVerbForms"];
 
 const isRecord = value => typeof value === "object" && value !== null && !Array.isArray(value);
 const isText = value => typeof value === "string" && value.trim().length > 0;
@@ -74,7 +74,11 @@ function validateQuizSettings(settings, words, wordParts) {
     const setting = Object.hasOwn(settings.wordSettings, id) ? settings.wordSettings[id] : undefined;
     requireBank(parts.length === 1 || setting?.sense, `多詞性單字缺少出題詞義與詞性對應（${id}）。`);
     const answerPart = setting?.sense?.partOfSpeech ?? parts[0];
-    requireBank(!verbParts.has(answerPart) || word.verbForms || setting?.supplementalVerbForms,
+    if(word.pendingVerbForms) {
+      requireBank(verbParts.has(answerPart)&&!word.verbForms&&!setting?.supplementalVerbForms,
+        "暫不出題的動詞資格無效（"+id+"）。");
+    }
+    requireBank(!verbParts.has(answerPart) || word.verbForms || setting?.supplementalVerbForms || word.pendingVerbForms,
       `動詞缺少完整三態（${id}）。`);
   }
 
@@ -124,6 +128,7 @@ export function validateBank(bank) {
     if (Object.hasOwn(word, "verbForms")) {
       requireBank(validForms(word.verbForms, word, parts), `原始動詞三態無效（${id}）。`);
     }
+    requireBank(word.pendingVerbForms===undefined||word.pendingVerbForms===true,"三態待補標記無效。");
     requireBank(word.senses === undefined || validSenses(word.senses, word, parts), "逐義資料無效（"+id+"）。");
     words.set(id, word);
     wordParts.set(id, parts);
@@ -133,6 +138,7 @@ export function validateBank(bank) {
   return bank;
 }
 
+export const quizReadyWords=words=>words.filter(word=>!word.pendingVerbForms);
 export function parseBank(text) {
   let bank;
   try {
@@ -236,6 +242,7 @@ function findDuplicateWord(words, word) {
 function makeWord(current, fields) {
   const word = { ...current, ...fields };
   if (word.verbForms === null) delete word.verbForms;
+  if (word.pendingVerbForms === null) delete word.pendingVerbForms;
   if (current.senses && fields && !Object.hasOwn(fields,"senses")) {
     const parts=word.partOfSpeech.split(/\s*&\s*/);
     word.senses=current.senses.filter(sense=>parts.includes(sense.partOfSpeech)&&word.chineseMeanings.includes(sense.meaning));

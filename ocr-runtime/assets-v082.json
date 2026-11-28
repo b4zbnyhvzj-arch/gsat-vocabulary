@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "path": "assets/worker-entry-C9UNuyOJ.js",
+      "bytes": 11341486,
+      "sha256": "477db3f009c118823a5f9ebe15f1e96c1c464165715ba28a9884290f61addf52"
+    },
+    {
+      "path": "assets/PP-OCRv5_mobile_det.tar",
+      "bytes": 4843520,
+      "sha256": "781056046c9ed77a15c94681605db6a0f62317c2e9cce6931c71da2478d4bc30"
+    },
+    {
+      "path": "assets/PP-OCRv5_mobile_rec.tar",
+      "bytes": 16701440,
+      "sha256": "f7e792bc836f36e7ef895ad47c426d75b0b75b1650caa6d63fe9418441ffba8c"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.jsep.mjs",
+      "bytes": 46595,
+      "sha256": "9a99acd12acc495184c9ea4d458ac9424f8180aacfbc7b8371ed64f9351e4a81"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.jsep.wasm",
+      "bytes": 25014754,
+      "sha256": "2e0a3d0e3f6b7c13ecfaba38c13691fd19c9ed470e72f9d7d8416ca59ab6dbcd"
+    },
+    {
+      "path": "engine-v082.js",
+      "bytes": 10486681,
+      "sha256": "7409c66014b0deded34579dbfdca7b34f630bc7fb14f90445444a5dd03248f0b"
+    },
+    {
+      "path": "ort.bundle.min-CJNQUNUA.js",
+      "bytes": 402692,
+      "sha256": "1a568a1722c9f861388c507d62bf31fc45005de1d52dcedc0e08f307843b6c41"
+    },
+    {
+      "path": "chunk-ZWRDP37E.js",
+      "bytes": 800,
+      "sha256": "6290d9f63097074876503fa52e1d48e282692f2b211a7dfd95122f7b96163db0"
+    }
+  ]
+}

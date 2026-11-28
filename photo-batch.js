@@ -1,6 +1,7 @@
 import { validateBank, prepareAddedWords, mergeSenses, recordHasSense } from "./bank.js";
-import { candidateBank } from "./ocr-lab/entry-candidate.js";
-import { candidateReviewPlan } from "./ocr-lab/entry-review.js";
+import {errorDetails} from "./ocr-task.js";
+import { candidateBank } from "./ocr-app-v083/entry-candidate.js";
+import { candidateReviewPlan } from "./ocr-app-v083/entry-review.js";
 
 const wordKey=value=>value.trim().normalize("NFC").toLowerCase();
 const union=(a,b)=>[...new Set([...a,...b])];
@@ -9,47 +10,76 @@ const parts=value=>value.split(/\s*&\s*/);
 const formKeys=["base","past","pastParticiple"];
 const sameForms=(a,b)=>formKeys.slice(1).every(key=>a[key].toLowerCase()===b[key].toLowerCase());
 
-export function createPhotoQueue(recognize) {
+export function createPhotoQueue(recognize,prepare=async()=>null) {
   const pages=[];
-  let active=null;
+  let active=null,nextId=0;
   return {
     pages,
     get running(){return active!==null;},
     add(files){
-      for (const file of files) pages.push({id:pages.length+1,file,state:"queued",page:""});
+      for (const file of files) pages.push({id:++nextId,file,state:"queued",page:"",attempts:[]});
+    },
+    remove(id){
+      if(active) return false;
+      const index=pages.findIndex(page=>page.id===id);
+      if(index<0) return false;
+      pages.splice(index,1);return true;
     },
     cancel(){active?.abort();},
-    async run({retry=false,onChange=()=>{}}={}) {
+    async run({retry=false,pageId,onChange=()=>{}}={}) {
       if (active) throw new Error("已有照片正在辨識。");
       const controller=new AbortController();
       active=controller;
+      const notify=page=>{
+        try {onChange(page);}
+        catch(error) {if(page) (page.uiErrors??=[]).push(errorDetails(error));}
+      };
       try {
         for (const page of pages) {
           if (controller.signal.aborted) break;
-          if (page.state!=="queued"&&!(retry&&["failed","cancelled"].includes(page.state))) continue;
-          page.state="running";
-          page.error="";
-          onChange(page);
+          if (pageId!==undefined ? page.id!==pageId :
+            page.state!=="queued"&&!(retry&&["failed","cancelled"].includes(page.state))) continue;
+          const attempt={startedAt:new Date().toISOString(),stages:[]}, started=performance.now();
+          page.attempts.push(attempt);
+          page.state="running";page.error="";page.progress="";
+          const progress=status=>{
+            page.progress=status;
+            attempt.stages.push({status,elapsedMs:performance.now()-started});
+            notify(page);
+          };
+          notify(page);
           try {
-            const result=await recognize(page.file,controller.signal,status=>{page.progress=status;onChange(page);});
-            if (controller.signal.aborted) page.state="cancelled";
-            else {page.result=result;page.state="done";}
+            attempt.result=await recognize(page.file,controller.signal,progress);
+            progress("解析詞性與詞義");
+            const parsed=await prepare(page,attempt.result,controller.signal);
+            if(controller.signal.aborted) {
+              page.state="cancelled";
+            } else {
+              page.result=attempt.result;
+              Object.assign(page,parsed);
+              page.state="done";
+            }
           } catch(error) {
             page.state=controller.signal.aborted?"cancelled":"failed";
             page.error=controller.signal.aborted?"":error.message;
+            attempt.error=errorDetails(error);
+            if(error.partial) attempt.partial=error.partial;
+          } finally {
+            attempt.state=page.state;
+            attempt.elapsedMs=performance.now()-started;
           }
-          onChange(page);
+          notify(page);
         }
       } finally {
         active=null;
-        onChange(null);
+        notify(null);
       }
     },
   };
 }
 
 function sourceDetails(page, refs, fallback) {
-  const base={material:page.material,page:page.page||null,image:page.image};
+  const base={material:page.material,page:page.page||null,...(page.image?{image:page.image}:{})};
   const sources=refs.length?refs:fallback.slice(0,1);
   if (!sources.length) return [base];
   return sources.map(ref=>({...base,...(ref.text?.trim()?{raw:ref.text}:{}),
@@ -89,6 +119,16 @@ export function duplicatePhotoWords(bank, unitId, grouped) {
   return [...grouped].flatMap(([key,row])=>index.has(key)?[{key,incoming:row,existing:index.get(key)}]:[]);
 }
 
+function mergePhotoSenses(senses) {
+  const combined=mergeSenses(senses);
+  return mergeSenses(combined.flatMap(sense=>{
+    if(sense.countability?.length) return [sense];
+    const explicit=combined.filter(other=>other.partOfSpeech===sense.partOfSpeech&&
+      other.meaning===sense.meaning&&(other.plural??null)===(sense.plural??null)&&other.countability?.length);
+    return explicit.length===1?[{...sense,countability:explicit[0].countability}]:[sense];
+  }));
+}
+
 export function preparePhotoImport(current, target, pages, decisions={}) {
   const expected=JSON.stringify(validateBank(current));
   const bank=structuredClone(current);
@@ -116,7 +156,7 @@ export function preparePhotoImport(current, target, pages, decisions={}) {
     const bankRow=candidateBank([row],{unitId,name:"候選",material:row.material,page:row.page});
     const {id,...word}=bankRow.words[0];
     const selected=bankRow.quizSettings.wordSettings[id];
-    word.senses=mergeSenses(row.senses.map(sense=>({partOfSpeech:sense.part,meaning:sense.meaning,
+    word.senses=mergePhotoSenses(row.senses.map(sense=>({partOfSpeech:sense.part,meaning:sense.meaning,
       countability:sense.countability,plural:sense.plural,sources:sense.sources})));
     if (!existing) {
       additions.push({word,quizSettings:selected});
@@ -128,10 +168,10 @@ export function preparePhotoImport(current, target, pages, decisions={}) {
     const merged=action==="merge"?{...existing,
       chineseMeanings:union(existing.chineseMeanings,word.chineseMeanings),
       partOfSpeech:union(parts(existing.partOfSpeech),parts(word.partOfSpeech)).join(" & "),
-      senses:mergeSenses([...existing.senses??[],...word.senses]),
+      senses:mergePhotoSenses([...existing.senses??[],...word.senses]),
     }:{...word,id:existing.id,
-      senses:mergeSenses(word.senses,(existing.senses??[]).filter(sense=>
-        word.senses.some(candidate=>candidate.partOfSpeech===sense.partOfSpeech&&candidate.meaning===sense.meaning))),
+      senses:mergePhotoSenses([...word.senses,...(existing.senses??[]).filter(sense=>
+        word.senses.some(candidate=>candidate.partOfSpeech===sense.partOfSpeech&&candidate.meaning===sense.meaning))]),
     };
     const keptSense=old.sense??{partOfSpeech:parts(existing.partOfSpeech)[0],meaning:existing.chineseMeanings[0]};
     const chosen=recordHasSense(merged,keptSense)
@@ -144,6 +184,9 @@ export function preparePhotoImport(current, target, pages, decisions={}) {
         if (available) finalSettings.supplementalVerbForms={...available,base:merged.english};
       }
     } else delete merged.verbForms;
+    if(merged.verbForms||finalSettings.supplementalVerbForms||!verbParts.has(chosen.partOfSpeech)) {
+      delete merged.pendingVerbForms;
+    } else if(word.pendingVerbForms) merged.pendingVerbForms=true;
     Object.defineProperty(settings,existing.id,{value:finalSettings,enumerable:true,writable:true,configurable:true});
     bank.words[bank.words.indexOf(existing)]=merged;
     summary.updated++;
